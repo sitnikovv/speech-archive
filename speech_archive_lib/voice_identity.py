@@ -18,19 +18,23 @@ class PyannoteEmbeddingBackend:
     def __init__(self, model_id: str = "pyannote/embedding", token: str | None = None, device: str | None = None):
         self.model_id = model_id
         try:
-            from pyannote.audio import Inference
+            from pyannote.audio import Inference, Model
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(f"pyannote.audio is not available: {exc}") from exc
-        kwargs: dict[str, Any] = {"window": "whole"}
-        if token:
-            kwargs["use_auth_token"] = token
-        self._inference = Inference(model_id, **kwargs)
+        try:
+            model = Model.from_pretrained(model_id, token=token)
+        except Exception as exc:  # pragma: no cover - environment dependent
+            raise RuntimeError(f"failed to load pyannote embedding model {model_id}: {exc}") from exc
+        if model is None:
+            raise RuntimeError(f"failed to load pyannote embedding model {model_id}: model is None")
+        torch_device = None
         if device:
             try:
                 import torch
-                self._inference.to(torch.device(device))
+                torch_device = torch.device(device)
             except Exception as exc:  # pragma: no cover - environment dependent
-                raise RuntimeError(f"failed to move pyannote embedding model to {device}: {exc}") from exc
+                raise RuntimeError(f"invalid torch device {device}: {exc}") from exc
+        self._inference = Inference(model, window="whole", device=torch_device)
 
     def embed(self, audio_path: Path, start: float | None = None, end: float | None = None) -> list[float]:
         if start is not None and end is not None:

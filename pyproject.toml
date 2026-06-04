@@ -9,6 +9,7 @@ dependencies = [
   "torch>=2.8.0",
   "nvidia-cublas-cu12>=12.9.2.10",
   "nvidia-cudnn-cu12>=9.10.0.56",
+  "omegaconf>=2.3.0",
 ]
 
 [dependency-groups]
