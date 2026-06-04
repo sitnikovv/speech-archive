@@ -117,6 +117,7 @@ def ensure_dirs(root: Path) -> list[Path]:
         stage_dir(root / "data", "09", "audit"),
         stage_dir(root / "data", "10", "check"),
         stage_dir(root / "data", "11", "role_consistency_review"),
+        root / "data" / "voice_profiles",
         root / "data" / "state",
     ]
     for d in dirs:

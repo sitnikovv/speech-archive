@@ -275,14 +275,34 @@ scripts/07_name_speakers.py
 
 - читает merge artifact;
 - находит локальные `SPEAKER_XX`;
-- выбирает короткие неперекрывающиеся фрагменты;
-- показывает label/time/text;
-- проигрывает фрагмент из audio artifact через `ffplay` или `mpv`;
-- просит пользователя ввести имя или команду `unknown`, `next`, `bad`, `skip`.
+- извлекает телефон и дату звонка из имени исходного файла, если они есть;
+- загружает voice profiles из `data/voice_profiles/`;
+- первым делом пытается auto-match по enrolled samples профилей (сейчас backend embeddings ещё не реализован, поэтому этот пункт фиксируется как `not_available` в artifact);
+- если auto-match не сработал, проигрывает фрагменты текущего speaker по одному;
+- Enter / `next` / `bad` означает следующий фрагмент этого же speaker;
+- когда фрагменты текущего speaker закончились, спрашивает, переходить ли к следующему; если ответ `нет`, начинает список фрагментов этого speaker заново;
+- если пользователь ввёл имя, ищет профиль по имени/alias;
+- если найден ровно один профиль, использует его автоматически; флаг `--confirm-existing-profiles` включает ручное подтверждение;
+- если профиль выбран, а введённого alias там нет, добавляет alias автоматически;
+- если профиля нет, предлагает создать профиль;
+- если из filename извлечён телефон, спрашивает, добавлять ли его к профилю; при согласии даты начала/окончания остаются пустыми, то есть связь бессрочная;
+- если пользователь вручную распознал speaker, сохраняет физический enrolled sample в mp3 из original/input mp3 artifact;
+- если speaker auto-распознался, sample не сохраняется;
+- если пользователь ответил `unknown`/`skip`, ничего не сохраняется в voice profiles.
 
-Постоянные sample-файлы не создаются.
+Voice profile storage:
 
-Имена сохраняются только в file-local mapping. Merge artifact не изменяется.
+```text
+data/voice_profiles/
+  <person_id>/
+    profile.json
+    samples/
+      enrolled/
+        <sample_id>.mp3
+        <sample_id>.json
+```
+
+Имена сохраняются в file-local mapping. Merge artifact не изменяется.
 
 Интерактивный ввод:
 
@@ -290,7 +310,7 @@ scripts/07_name_speakers.py
 - перед вводом включается `IUTF8`, если доступно, чтобы Backspace корректно стирал UTF-8 символы;
 - malformed UTF-8 во вводе не валит процесс: битые байты отбрасываются с warning и raw hex.
 
-В non-interactive режиме все speaker labels получают `UNKNOWN`. Это используется только для end-to-end проверки.
+`--ci-non-interactive` — только для CI/end-to-end проверки: не проигрывает audio и оставляет speakers `UNKNOWN`.
 
 Входы:
 
@@ -305,6 +325,9 @@ Outputs:
 ```text
 data/artifacts/07_speakers/sound.speakers.manual.v1.json
 data/artifacts/07_speakers/sound.speakers.manual.v1.manifest.json
+data/voice_profiles/<person_id>/profile.json
+data/voice_profiles/<person_id>/samples/enrolled/<sample_id>.mp3
+data/voice_profiles/<person_id>/samples/enrolled/<sample_id>.json
 ```
 
 ---

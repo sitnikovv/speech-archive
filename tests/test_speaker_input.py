@@ -75,6 +75,31 @@ class SpeakerInputTests(unittest.TestCase):
             self.assertFalse(module.enable_utf8_erase(stdin))
         getattrs.assert_not_called()
 
+    def test_parser_exposes_interactive_and_ci_flags(self):
+        module = load_script_module()
+        help_text = module.build_parser().format_help()
+        self.assertIn("--ci-non-interactive", help_text)
+        self.assertIn("--source-mp3", help_text)
+        self.assertIn("--confirm-existing-profiles", help_text)
+        self.assertIn("--max-samples-per-speaker", help_text)
+        with self.assertRaises(SystemExit), mock.patch.object(sys, "stderr", io.StringIO()):
+            module.build_parser().parse_args(["merged.json", "--audio", "audio.wav", "--non-interactive"])
+
+    def test_ask_speaker_name_enter_cycles_and_restarts_when_fragments_end(self):
+        module = load_script_module()
+        spans = [
+            {"start": 1.0, "end": 2.0, "text": "one"},
+            {"start": 3.0, "end": 4.0, "text": "two"},
+        ]
+        answers = iter(["", "", "n", "Яна"])
+        with mock.patch.object(module, "read_prompt_utf8", side_effect=lambda prompt: next(answers)), \
+             mock.patch.object(module.playback, "play_segment", return_value=True) as play, \
+             mock.patch.object(sys, "stdout", io.StringIO()):
+            name, span = module.ask_speaker_name("SPEAKER_00", spans, Path("audio.wav"), "auto", False)
+        self.assertEqual(name, "Яна")
+        self.assertEqual(span["start"], 1.0)
+        self.assertEqual(play.call_count, 3)
+
 
 if __name__ == "__main__":
     unittest.main()
