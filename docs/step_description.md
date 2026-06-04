@@ -279,7 +279,7 @@ scripts/07_voice_identification.py
 - загружает voice profiles из `data/voice_profiles/`;
 - сначала сравнивает голосовые фрагменты каждого `SPEAKER_XX` с confirmed enrolled samples;
 - использует `pyannote/embedding` как backend speaker embeddings;
-- применяет phone/date prior только как порядок/приоритет сравнения, не как истину;
+- не использует телефон/дату для выбора результата: best match выбирается только по voice score;
 - сохраняет candidates, best match, score, threshold decision и backend status;
 - не спрашивает пользователя и не изменяет profiles.
 

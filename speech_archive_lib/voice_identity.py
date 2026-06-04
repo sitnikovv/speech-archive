@@ -109,12 +109,10 @@ def match_speaker(
     spans: list[dict[str, Any]],
     profiles_root: Path,
     profiles: list[dict[str, Any]],
-    phone_resolution: dict[str, Any],
     auto_threshold: float = 0.78,
     confirm_threshold: float = 0.65,
 ) -> dict[str, Any]:
-    priority_ids = {str(p.get("person_id")) for p in phone_resolution.get("priority_profiles", []) if p.get("person_id")}
-    samples = voice_profiles.enrolled_samples(profiles_root, priority_ids)
+    samples = voice_profiles.enrolled_samples(profiles_root)
     if not samples:
         return {"speaker_label": speaker_label, "status": "no_samples", "candidates": [], "best": None}
     if not spans:
@@ -135,11 +133,10 @@ def match_speaker(
                 "sample": str(sample),
                 "score": score,
                 "speaker_span": {"start": span.get("start"), "end": span.get("end"), "text": span.get("text")},
-                "priority_by_phone": person_id in priority_ids,
             })
     if not candidate_rows:
         return {"speaker_label": speaker_label, "status": "no_samples", "candidates": [], "best": None}
-    candidate_rows.sort(key=lambda c: (bool(c.get("priority_by_phone")), float(c["score"])), reverse=True)
+    candidate_rows.sort(key=lambda c: float(c["score"]), reverse=True)
     best = candidate_rows[0]
     if float(best["score"]) >= auto_threshold:
         status = "matched"

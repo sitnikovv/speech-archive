@@ -80,7 +80,6 @@ def main() -> int:
                     spans=spans,
                     profiles_root=profiles_root,
                     profiles=profiles,
-                    phone_resolution=phone_resolution,
                     auto_threshold=args.auto_threshold,
                     confirm_threshold=args.confirm_threshold,
                 ))
@@ -88,12 +87,11 @@ def main() -> int:
                 speaker_matches.append({"speaker_label": label, "status": "error", "error": str(exc), "candidates": [], "best": None})
     else:
         for label in labels:
-            priority_ids = {str(p.get("person_id")) for p in phone_resolution.get("priority_profiles", []) if p.get("person_id")}
             speaker_matches.append({
                 "speaker_label": label,
                 "status": "backend_unavailable",
                 "error": backend_error,
-                "enrolled_samples_seen": len(voice_profiles.enrolled_samples(profiles_root, priority_ids)),
+                "enrolled_samples_seen": len(voice_profiles.enrolled_samples(profiles_root)),
                 "candidates": [],
                 "best": None,
             })

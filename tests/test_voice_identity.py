@@ -35,7 +35,6 @@ class VoiceIdentityTests(unittest.TestCase):
                 spans=[{"start": 1.0, "end": 2.0, "text": "hello"}],
                 profiles_root=root,
                 profiles=voice_profiles.load_profiles(root),
-                phone_resolution={"priority_profiles": []},
                 auto_threshold=0.9,
                 confirm_threshold=0.5,
             )
