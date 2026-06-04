@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "07_name_speakers.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "08_name_speakers.py"
 
 
 def load_script_module():
@@ -83,7 +83,7 @@ class SpeakerInputTests(unittest.TestCase):
         self.assertIn("--confirm-existing-profiles", help_text)
         self.assertIn("--max-samples-per-speaker", help_text)
         with self.assertRaises(SystemExit), mock.patch.object(sys, "stderr", io.StringIO()):
-            module.build_parser().parse_args(["merged.json", "--audio", "audio.wav", "--non-interactive"])
+            module.build_parser().parse_args(["merged.json", "voice-id.json", "--audio", "audio.wav", "--non-interactive"])
 
     def test_ask_speaker_name_enter_cycles_and_restarts_when_fragments_end(self):
         module = load_script_module()

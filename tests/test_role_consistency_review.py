@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "11_role_consistency_review.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "12_role_consistency_review.py"
 
 
 def load_script_module():

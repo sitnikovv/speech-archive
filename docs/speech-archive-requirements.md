@@ -263,33 +263,58 @@ Output:
 - нет молчаливого угадывания говорящего при смешанных пересечениях;
 - все speaker labels либо `SPEAKER_XX`, либо явные служебные значения.
 
-### Шаг 8. Назначить имена локальным говорящим
+### Шаг 7. Автоматически сопоставить голоса с voice profiles
 
-Цель: создать file-local mapping `SPEAKER_XX -> имя человека` до аудита аномалий.
+Цель: до ручного именования сравнить `SPEAKER_XX` с enrolled samples в `data/voice_profiles`.
 
 Скрипт:
 
-`scripts/07_name_speakers.py`
+`scripts/07_voice_identification.py`
 
 Он должен:
 - найти локальные speaker labels в merged JSON;
-- для каждого неизвестного `SPEAKER_XX` предложить короткий атомарный фрагмент для прослушивания;
-- перед вводом ответа автоматически проиграть этот фрагмент из исходного/рабочего audio-файла по таймкоду;
-- не сохранять sample-файл постоянно;
-- позволить пользователю ввести имя, `unknown`, `skip`, `bad`, `next`;
-- если пользователь отвечает `next` или “непонятно”, предложить другой фрагмент того же speaker label;
-- сохранить mapping JSON.
+- загрузить confirmed enrolled samples из voice profiles;
+- вычислить speaker embeddings через `pyannote/embedding`;
+- сравнить candidate spans с enrolled samples;
+- сохранить candidates, scores, thresholds и status;
+- не спрашивать пользователя и не менять voice profiles.
 
 Output:
 
-`data/work/speakers/<base>.speakers.json`
+`data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.json`
+
+Проверяемая цель:
+- voice-id JSON существует;
+- в нём есть все speaker labels из merged JSON;
+- каждый `SPEAKER_XX` имеет status `matched`/`needs_confirmation`/`no_match`/`no_samples`/`backend_unavailable`;
+- для совпадений есть sample, score и evidence span;
+- profile storage не изменяется этим шагом.
+
+### Шаг 8. Назначить имена локальным говорящим
+
+Цель: создать final file-local mapping, используя voice-id artifact и ручной fallback для нерешённых speaker labels.
+
+Скрипт:
+
+`scripts/08_name_speakers.py`
+
+Он должен:
+- взять merged JSON;
+- взять voice-id JSON;
+- автоматически принять уверенные `matched`;
+- для остальных speaker labels проиграть фрагмент и спросить пользователя;
+- после ручного подтверждения сохранить enrolled sample;
+- сохранить speakers mapping JSON.
+
+Output:
+
+`data/artifacts/08_speakers/<base>.speakers.manual.v1.json`
 
 Проверяемая цель:
 - speakers JSON существует;
 - в нём есть все speaker labels из merged JSON;
 - каждому `SPEAKER_XX` назначено либо имя человека, либо `UNKNOWN`/`UNCERTAIN`;
-- для имени человека есть evidence time range;
-- sample-файлы не остались в постоянном хранилище;
+- для ручного имени человека есть evidence time range;
 - mapping имеет `scope: file-local`.
 
 ### Шаг 9. Экспортировать transcript по ролям
@@ -298,7 +323,7 @@ Output:
 
 Скрипт:
 
-`scripts/08_export_transcript.py`
+`scripts/09_export_transcript.py`
 
 Он должен:
 - взять merged JSON;
@@ -309,7 +334,7 @@ Output:
 
 Output:
 
-`data/exports/<base>.transcript.with-names.txt`
+`data/artifacts/09_transcript/<base>.transcript.with-names.v1.txt`
 
 Проверяемая цель:
 - transcript существует;
@@ -325,7 +350,7 @@ Output:
 
 Скрипт:
 
-`scripts/09_audit_dialogue_anomalies.py`
+`scripts/10_audit_dialogue_anomalies.py`
 
 Он должен:
 - принимать transcript with names и/или merged JSON + speakers JSON;
@@ -335,7 +360,7 @@ Output:
 
 Output:
 
-`data/work/audit/<base>.audit.candidates.json`
+`data/artifacts/10_audit/<base>.audit.dialogue.v1.json`
 
 Проверяемая цель:
 - candidates JSON существует, даже если список кандидатов пустой;
@@ -349,7 +374,7 @@ Output:
 
 Скрипт:
 
-`scripts/10_check_pipeline_outputs.py`
+`scripts/11_check_pipeline_outputs.py`
 
 Он должен проверить наличие и валидность всех обязательных output-файлов для тестового mp3:
 - input manifest;
@@ -359,9 +384,10 @@ Output:
 - diarization raw JSON;
 - diarization segments JSON;
 - merged JSON;
+- voice-id JSON;
 - speakers JSON;
 - transcript with names;
-- audit candidates JSON, если audit уже запускался.
+- audit candidates JSON.
 
 Проверяемая цель:
 - checker печатает `OK` только если все обязательные файлы существуют и проходят базовую валидацию;

@@ -26,7 +26,8 @@ class ImmutableArtifactTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             artifacts.ensure_dirs(root)
-            self.assertTrue((root / "data" / "artifacts" / "11_role_consistency_review").is_dir())
+            self.assertTrue((root / "data" / "artifacts" / "07_voice_identification").is_dir())
+            self.assertTrue((root / "data" / "artifacts" / "12_role_consistency_review").is_dir())
 
 
 if __name__ == "__main__":

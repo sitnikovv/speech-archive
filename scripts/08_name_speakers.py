@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
 
 import argparse
 import termios
-from speech_archive_lib import artifacts, io_utils, playback, voice_profiles
+from speech_archive_lib import artifacts, io_utils, playback, voice_identity, voice_profiles
 
 
 def enable_utf8_erase(stdin=sys.stdin) -> bool:
@@ -60,8 +60,9 @@ def choose_spans(segments, label, max_count=5):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description='Step 07: assign file-local SPEAKER_XX labels to people.')
+    ap = argparse.ArgumentParser(description='Step 08: assign unresolved file-local SPEAKER_XX labels to people.')
     ap.add_argument('merged')
+    ap.add_argument('voice_identification')
     ap.add_argument('--audio', required=True)
     ap.add_argument('--source-mp3', help='Original/input mp3 for saving confirmed enrolled samples; auto-detected from data/artifacts/01_input when omitted.')
     ap.add_argument('--new-version', action='store_true')
@@ -156,8 +157,8 @@ def ask_speaker_name(label: str, spans: list[dict], audio: Path, player: str, de
 
 
 def main() -> int:
-    args=build_parser().parse_args(); merged_p=Path(args.merged); audio=Path(args.audio); merged=io_utils.read_json(merged_p); source_mp3=merged.get('source_mp3') or audio.name; base=artifacts.base_name(Path(source_mp3))
-    artifacts.ensure_dirs(ROOT); stage=artifacts.stage_dir(ROOT/'data','07','speakers'); stem=f'{base}.speakers.manual'
+    args=build_parser().parse_args(); merged_p=Path(args.merged); voice_id_p=Path(args.voice_identification); audio=Path(args.audio); merged=io_utils.read_json(merged_p); voice_id=io_utils.read_json(voice_id_p); source_mp3=merged.get('source_mp3') or audio.name; base=artifacts.base_name(Path(source_mp3))
+    artifacts.ensure_dirs(ROOT); stage=artifacts.stage_dir(ROOT/'data','08','speakers'); stem=f'{base}.speakers.manual'
     existing=artifacts.latest_versioned_path(stage,stem,'.json') if not args.new_version else None
     if existing and existing.exists(): print(existing); return 0
     if not args.ci_non_interactive:
@@ -169,11 +170,11 @@ def main() -> int:
     phone_resolution=voice_profiles.resolve_phone_profiles(profiles,call_meta.get('phone_e164'),call_meta.get('call_datetime'))
     original_mp3=voice_profiles.find_source_mp3(ROOT, source_mp3, args.source_mp3)
     labels=sorted({s.get('speaker_label') for s in merged.get('segments',[]) if str(s.get('speaker_label','')).startswith('SPEAKER_')})
-    assignments={}; enrolled_samples=[]; profile_updates=[]; auto_match_reports=[]
+    assignments=voice_identity.assignments_from_voice_id(voice_id); enrolled_samples=[]; profile_updates=[]
     for label in labels:
+        if label in assignments:
+            continue
         spans=choose_spans(merged.get('segments',[]),label,args.max_samples_per_speaker)
-        auto_report=voice_profiles.auto_match_placeholder(profiles_root, phone_resolution)
-        auto_match_reports.append({'speaker_label': label, **auto_report})
         name='UNKNOWN'; evidence=None; method='manual_uncertain'
         selected_span=None
         if not args.ci_non_interactive:
@@ -199,7 +200,7 @@ def main() -> int:
                 method='manual_voice_confirmation_without_profile'
         assignments[label]={'name':name,'method':method,'evidence':evidence}
     v=artifacts.next_version(stage,stem,'.json'); out=artifacts.versioned_path(stage,stem,'.json',v); man=artifacts.manifest_for(out)
-    data={'artifact':str(out),'stage':'07_speakers','source_mp3':source_mp3,'scope':'file-local','created_at':io_utils.utc_now(),'source_metadata':call_meta,'voice_profiles_dir':str(profiles_root),'phone_resolution':phone_resolution,'auto_match_reports':auto_match_reports,'profile_updates':profile_updates,'enrolled_samples':enrolled_samples,'assignments':assignments}
+    data={'artifact':str(out),'stage':'08_speakers','source_mp3':source_mp3,'scope':'file-local','created_at':io_utils.utc_now(),'source_metadata':call_meta,'voice_profiles_dir':str(profiles_root),'phone_resolution':phone_resolution,'voice_identification_file':str(voice_id_p),'profile_updates':profile_updates,'enrolled_samples':enrolled_samples,'assignments':assignments}
     io_utils.write_json(out,data); outputs=[{'path':str(out),'sha256':io_utils.sha256_file(out)}]
     for sample in enrolled_samples:
         outputs.append({'path':sample['sample'],'sha256':io_utils.sha256_file(Path(sample['sample']))})
@@ -207,6 +208,6 @@ def main() -> int:
     for update in profile_updates:
         p = Path(update['profile_dir'])/'profile.json'
         outputs.append({'path':str(p),'sha256':io_utils.sha256_file(p)})
-    io_utils.write_json(man,{'stage':'07_speakers','script':'scripts/07_name_speakers.py','input_artifacts':[{'path':str(merged_p),'sha256':io_utils.sha256_file(merged_p)},{'path':str(audio),'sha256':io_utils.sha256_file(audio)}],'output_artifacts':outputs,'created_at':io_utils.utc_now()})
+    io_utils.write_json(man,{'stage':'08_speakers','script':'scripts/08_name_speakers.py','input_artifacts':[{'path':str(merged_p),'sha256':io_utils.sha256_file(merged_p)},{'path':str(voice_id_p),'sha256':io_utils.sha256_file(voice_id_p)},{'path':str(audio),'sha256':io_utils.sha256_file(audio)}],'output_artifacts':outputs,'created_at':io_utils.utc_now()})
     print(out); return 0
 if __name__=='__main__': raise SystemExit(main())
