@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+
+# Local secrets
+.env
+token.txt
+
+# Local/generated pipeline data
+data/
+talk.md
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.ogg
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

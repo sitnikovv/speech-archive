@@ -1,0 +1,15 @@
+[project]
+name = "speech-archive-file-pipeline"
+version = "0.1.0"
+description = "File-first local Russian MP3 speech archive pipeline"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "faster-whisper>=1.2.1",
+  "pyannote-audio>=4.0.4",
+  "torch>=2.8.0",
+  "nvidia-cublas-cu12>=12.9.2.10",
+  "nvidia-cudnn-cu12>=9.10.0.56",
+]
+
+[dependency-groups]
+dev = []
