@@ -419,24 +419,24 @@ data/artifacts/09_transcript/sound.transcript.with-names.v1.manifest.json
 
 ---
 
-## Шаг 10. Audit dialogue anomalies / эвристический audit
+## Шаг 10. Role consistency review / LLM-проверка согласованности ролей
 
 Скрипт:
 
 ```text
-scripts/10_audit_dialogue_anomalies.py
+scripts/10_role_consistency_review.py
 ```
 
 Что делает:
 
 - читает merge, speakers и transcript;
-- не меняет предыдущие artifacts;
-- создаёт candidates JSON.
-
-Текущая реализация — heuristic placeholder. Она отмечает:
-
-- сегменты с `MIXED`, `OVERLAP`, `UNCERTAIN`;
-- некоторые короткие continuation-like реплики после смены говорящего.
+- вызывает реальный LLM через Hermes CLI;
+- просит LLM найти кандидаты, где текущий говорящий плохо согласуется с соседним контекстом диалога;
+- не использует заранее заданные доменные правила, списки фраз, шаблоны или хардкод;
+- считает имена/labels непрозрачными идентификаторами;
+- не исправляет данные автоматически;
+- сохраняет structured JSON review;
+- сохраняет raw LLM response рядом с artifact.
 
 Входы:
 
@@ -449,110 +449,184 @@ data/artifacts/09_transcript/sound.transcript.with-names.v1.txt
 Outputs:
 
 ```text
-data/artifacts/10_audit/sound.audit.dialogue.v1.json
-data/artifacts/10_audit/sound.audit.dialogue.v1.manifest.json
+data/artifacts/10_role_consistency_review/sound.role-consistency-review.hermes.v1.json
+data/artifacts/10_role_consistency_review/sound.role-consistency-review.hermes.v1.raw.txt
+data/artifacts/10_role_consistency_review/sound.role-consistency-review.hermes.v1.manifest.json
 ```
+
+Шаг 10 является derived review layer. Он не меняет speaker mapping. Применение кандидатов должно быть отдельным ручным шагом.
 
 ---
 
-## Шаг 11. Check pipeline outputs / проверка обязательных outputs
+## Шаг 11. Build voice profile embeddings / cache для voice profiles
 
 Скрипт:
 
 ```text
-scripts/11_check_pipeline_outputs.py
+scripts/11_build_voice_profile_embeddings.py
 ```
 
 Что делает:
 
-- проверяет, что обязательные artifacts шагов 01–10 существуют и валидны;
-- проверяет JSON на валидность;
-- проверяет, что transcript txt не пустой;
-- создаёт check artifact.
-
-Шаг 11 не является смысловым анализом. Это технический integrity-check базового pipeline.
-
-Входы:
-
-```text
-latest artifacts шагов 01–10
-```
-
-Output:
-
-```text
-data/artifacts/11_check/sound.pipeline-check.v1.json
-```
-
----
-
-## Шаг 12. Role consistency review / LLM-проверка согласованности ролей
-
-Скрипт:
-
-```text
-scripts/12_role_consistency_review.py
-```
-
-Что делает:
-
-- читает merge, speakers и transcript;
-- вызывает реальный LLM через Hermes CLI;
-- просит LLM найти кандидаты, где текущий говорящий плохо согласуется с соседним контекстом диалога;
-- не использует заранее заданные доменные правила, списки фраз, шаблоны или хардкод;
-- считает имена/labels непрозрачными идентификаторами: LLM не должен делать выводы из смысла названия label/name;
-- не исправляет данные автоматически;
-- сохраняет structured JSON review;
-- сохраняет raw LLM response рядом с artifact.
-
-Текущий runner:
-
-```text
-hermes -z <prompt> --cli
-```
-
-Модель и provider берутся из текущей Hermes config, если явно не добавлены параметры выбора модели/provider в будущей версии скрипта.
+- читает confirmed enrolled samples из `data/voice_profiles/<person_id>/samples/enrolled/`;
+- строит или обновляет unified embedding cache;
+- поддерживает backend-и `pyannote`, `ecapa` или `all`;
+- может мигрировать legacy cache;
+- не назначает speaker labels и не спрашивает пользователя.
 
 Входы:
 
 ```text
-data/artifacts/06_merge/sound.merge...v1.json
-data/artifacts/08_speakers/sound.speakers.manual.vN.json
-data/artifacts/09_transcript/sound.transcript.with-names.vN.txt
+data/voice_profiles/<person_id>/samples/enrolled/*.mp3
+token.txt для pyannote/HF, если нужен
 ```
 
 Outputs:
 
 ```text
-data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.v1.json
-data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.v1.raw.txt
-data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.v1.manifest.json
+data/voice_profiles/<person_id>/voice_embeddings/<backend>/<model>/<sample>.json
+data/artifacts/11_voice_profile_embeddings/voice-profile-embeddings.v1.json
+data/artifacts/11_voice_profile_embeddings/voice-profile-embeddings.v1.manifest.json
 ```
 
-Что внутри review JSON:
+---
 
-```json
-{
-  "stage": "12_role_consistency_review",
-  "llm_runner": "hermes-cli",
-  "review": {
-    "status": "ok",
-    "method": "llm_role_consistency_review",
-    "candidates": [
-      {
-        "time": "HH:MM:SS.mmm",
-        "current_speaker": "speaker из transcript",
-        "suggested_speaker": "существующий speaker/name или UNKNOWN",
-        "confidence": 0.0,
-        "reason": "краткое объяснение через соседний контекст",
-        "evidence_lines": ["короткие цитаты из соседних строк"]
-      }
-    ]
-  }
-}
+## Шаг 99. Check pipeline outputs / проверка обязательных outputs
+
+Скрипт:
+
+```text
+scripts/99_check_pipeline_outputs.py
 ```
 
-Шаг 12 является derived review layer. Он не входит в обязательный check шага 11 и не меняет speaker mapping. Применение кандидатов должно быть отдельным ручным шагом.
+Что делает:
+
+- проверяет, что обязательные artifacts шагов `01`–`11` существуют и валидны;
+- проверяет JSON на валидность;
+- проверяет, что transcript txt не пустой;
+- создаёт check artifact.
+
+Входы:
+
+```text
+latest artifacts шагов 01–11
+```
+
+Output:
+
+```text
+data/artifacts/99_check/sound.pipeline-check.v1.json
+```
+
+---
+
+## Примеры запуска
+
+В примерах ниже `BASE` — имя mp3 без расширения.
+
+```bash
+MP3='/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3'
+BASE="$(basename "$MP3" .mp3)"
+```
+
+Отдельные команды по скриптам:
+
+```bash
+# 00: проверка окружения
+uv run python scripts/00_doctor.py --source-mp3 "$MP3"
+
+# 01: рабочая immutable-копия mp3
+uv run python scripts/01_prepare_input.py "$MP3"
+
+# 02: нормализованный WAV
+uv run python scripts/02_make_audio_variant.py "data/artifacts/01_input/${BASE}.input.v1.mp3"
+
+# 03: ASR smoke compare
+uv run python scripts/03_asr_smoke_compare.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 04: полный ASR
+uv run python scripts/04_transcribe.py \
+  "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav" \
+  --smoke-report "data/artifacts/03_asr_smoke/${BASE}.asr-smoke.v1.json"
+
+# 05: diarization
+uv run python scripts/05_diarize.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 06: merge ASR + diarization
+uv run python scripts/06_merge_asr_diarization.py \
+  "data/artifacts/04_asr/${BASE}.asr.Systran_faster-whisper-large-v3.segments.v1.json" \
+  "data/artifacts/05_diarization/${BASE}.diarization.pyannote_speaker-diarization-3.1.segments.v1.json"
+
+# 07: основной voice-id backend pyannote/embedding
+uv run python scripts/07_voice_identification.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 07_1: экспериментальный diagnostic backend SpeechBrain ECAPA
+uv run python scripts/07_1_voice_identification_ecapa.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 08: ручное назначение имён. Запускать только вручную пользователем.
+uv run python scripts/08_name_speakers.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 09: экспорт transcript
+uv run python scripts/09_export_transcript.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/08_speakers/${BASE}.speakers.manual.v1.json"
+
+# 10: LLM role-consistency review, без автоправок
+uv run python scripts/10_role_consistency_review.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/08_speakers/${BASE}.speakers.manual.v1.json" \
+  "data/artifacts/09_transcript/${BASE}.transcript.with-names.v1.txt"
+
+# 11: пересборка embedding cache для voice profiles
+uv run python scripts/11_build_voice_profile_embeddings.py --backend all
+
+# 99: итоговая проверка обязательных artifacts
+uv run python scripts/99_check_pipeline_outputs.py "$MP3"
+```
+
+### Общий запуск до ручного шага 08
+
+Эта команда выполняет все неинтерактивные шаги до `08_name_speakers.py`: `00` → `07`.
+Она не запускает `08`, потому что там нужно слушать фрагменты и вводить имена.
+
+```bash
+set -euo pipefail
+MP3='/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3'
+BASE="$(basename "$MP3" .mp3)"
+
+uv run python scripts/00_doctor.py --source-mp3 "$MP3"
+uv run python scripts/01_prepare_input.py "$MP3"
+uv run python scripts/02_make_audio_variant.py "data/artifacts/01_input/${BASE}.input.v1.mp3"
+uv run python scripts/03_asr_smoke_compare.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+uv run python scripts/04_transcribe.py \
+  "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav" \
+  --smoke-report "data/artifacts/03_asr_smoke/${BASE}.asr-smoke.v1.json"
+uv run python scripts/05_diarize.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+uv run python scripts/06_merge_asr_diarization.py \
+  "data/artifacts/04_asr/${BASE}.asr.Systran_faster-whisper-large-v3.segments.v1.json" \
+  "data/artifacts/05_diarization/${BASE}.diarization.pyannote_speaker-diarization-3.1.segments.v1.json"
+uv run python scripts/07_voice_identification.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+```
+
+Дальше остановка на ручном gate:
+
+```bash
+uv run python scripts/08_name_speakers.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+```
+
+Интерактивные/ручные шаги запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто проходить `08_name_speakers.py` за пользователя.
 
 ---
 
@@ -575,21 +649,22 @@ data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.v
                              ▼
                          06_merge
                              │
-                             ▼
-                    07_voice_identification
-                             │
-                             ▼
-                         08_speakers
-                             │
-                             ▼
-                         09_transcript
-                             │
-              ┌──────────────┴──────────────┐
-              ▼                             ▼
-          10_audit              12_role_consistency_review
-              │
-              ▼
-          11_check
+             ┌───────────────┴────────────────┐
+             ▼                                ▼
+   07_voice_identification          07_1_voice_identification_ecapa
+             │                       diagnostic optional branch
+             ▼
+      08_name_speakers
+      ручной интерактивный gate
+             │
+             ▼
+        09_transcript
+             │
+             ▼
+  10_role_consistency_review
+
+11_build_voice_profile_embeddings читает data/voice_profiles и может запускаться отдельно после enrollment.
+99_check проверяет обязательные artifacts 01–11.
 ```
 
 Точнее:
@@ -620,19 +695,29 @@ data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.v
 - 06 merge
 - 08 speakers
 
-10_audit читает:
+10_role_consistency_review читает:
 - 06 merge
 - 08 speakers
 - 09 transcript
 
-11_check читает:
-- latest artifacts обязательных шагов 01–10
+07_1_voice_identification_ecapa читает:
+- 06 merge
+- 02 audio artifact для embedding фрагментов
+- data/voice_profiles confirmed enrolled samples
 
-12_role_consistency_review читает:
+99_check читает:
+- latest artifacts обязательных шагов 01–11
+- 10 role_consistency_review
+- 11 voice_profile_embeddings
+
+10_role_consistency_review читает:
 - 06 merge
 - 08 speakers
 - 09 transcript
 - текущую Hermes model/provider config для реального LLM-вызова
+
+11_build_voice_profile_embeddings читает:
+- data/voice_profiles confirmed enrolled samples
 ```
 
 ---
@@ -693,7 +778,7 @@ data/artifacts/09_transcript/sound.transcript.with-names.v2.txt
 Review сохраняется как отдельный derived artifact:
 
 ```text
-data/artifacts/12_role_consistency_review/sound.role-consistency-review.hermes.vN.json
+data/artifacts/10_role_consistency_review/sound.role-consistency-review.hermes.vN.json
 ```
 
 Применение кандидатов — отдельное ручное решение и отдельный будущий шаг.

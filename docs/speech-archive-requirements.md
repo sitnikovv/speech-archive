@@ -2,840 +2,728 @@
 
 ## 1. Назначение
 
-Создать локальную файловую систему обработки архива телефонных mp3-записей на русском языке.
+Создать локальный файловый конвейер обработки архива русскоязычных телефонных MP3-записей.
 
 Система должна позволять:
-- распознавать речь дословно;
-- получать таймкоды фраз;
-- выполнять диаризацию: определять, какой локальный говорящий говорил в какие промежутки;
-- назначать локальным говорящим имена людей до запуска анализа аномалий;
-- формировать готовый текстовый transcript “по ролям”;
-- сохранять все первичные outputs моделей и производные промежуточные файлы;
-- позже искать слова/фразы, спорные места, важные эпизоды и аномалии диалога;
-- проверять любой результат по исходному аудио.
 
-Первая версия делается без SQLite, без единого большого приложения и без web UI.
+- сохранять исходное аудио неизменным;
+- создавать рабочие audio-варианты для моделей;
+- распознавать речь дословно с таймкодами;
+- выполнять diarization: определять локальные `SPEAKER_XX` по времени;
+- сопоставлять локальные голоса с подтверждёнными voice profiles;
+- вручную назначать оставшиеся имена говорящих;
+- сохранять подтверждённые voice samples только после ручного подтверждения;
+- экспортировать transcript по ролям;
+- выполнять LLM-review согласованности ролей/говорящих без автоправок;
+- пересобирать voice-profile embedding cache;
+- проверять наличие и валидность обязательных artifacts.
+
+Текущая реализация — file-first pipeline без SQLite, без web UI и без единого большого приложения.
 
 ## 2. Главный принцип
 
-Исходный mp3 и первичные результаты моделей являются доказательной основой.
+Исходный MP3 и первичные результаты моделей являются evidence-данными.
 
 Запрещено заменять исходное аудио или raw outputs моделей исправленными, объединёнными, очищенными, “улучшенными” или литературными версиями.
 
-Все исправления, объединения, назначения говорящих, человекочитаемые transcript-файлы и аналитические выводы являются отдельными производными файлами.
-
-## 3. Архитектура первой версии
-
-Первая версия строится как набор отдельных скриптов.
-
-Каждый скрипт:
-- выполняет только одну функцию;
-- принимает на вход исходный mp3 или результаты предыдущего шага;
-- сохраняет результат в отдельный файл;
-- не требует SQLite;
-- не хранит состояние в базе данных;
-- не перезаписывает успешный результат без явного флага rebuild/overwrite;
-- при повторном запуске должен уметь пропускать уже готовый результат.
-
-Пайплайн первой версии:
-
-1. Подготовка/нормализация аудио, если нужна конкретной модели.
-2. ASR: распознавание речи.
-3. Diarization: разделение говорящих.
-4. Merge: совмещение ASR-сегментов с diarization-сегментами.
-5. Speaker naming: назначение имён локальным говорящим по прослушиванию фрагментов.
-6. Export: выпуск готового transcript-файла по ролям.
-7. Dialogue anomaly audit: поиск аномалий только после того, как говорящим назначены имена.
-
-## 3.1. Порядок реализации и проверяемые цели
-
-Каждый шаг ниже должен завершаться конкретным проверяемым артефактом. Нельзя переходить к следующему шагу, если проверка текущего шага не пройдена, кроме случая, когда в ТЗ явно указан допустимый fallback.
-
-### Шаг 0. Создать новый каркас проекта
-
-Цель: подготовить чистую новую реализацию без использования старого кода.
-
-Нужно создать:
-- `scripts/` — отдельные исполняемые скрипты pipeline;
-- `speech_archive_lib/` — только новый общий код, если он действительно нужен нескольким скриптам;
-- `data/input/raw/`;
-- `data/work/audio/`;
-- `data/work/asr/`;
-- `data/work/diarization/`;
-- `data/work/merge/`;
-- `data/work/speakers/`;
-- `data/work/audit/`;
-- `data/exports/`.
-
-Проверяемая цель:
-- папки существуют;
-- старый `src/`, старые `tests/`, старая SQLite DB и старая `.venv` не восстановлены;
-- в проекте остаются `docs/speech-archive-requirements.md`, `token.txt`, `data/models-cache/` и новые файлы реализации.
-
-### Шаг 1. Проверить окружение и доступные модели
-
-Цель: понять, какие модели реально запускаются локально.
-
-Скрипт:
-
-`scripts/00_doctor.py`
-
-Он должен проверить:
-- наличие `ffmpeg`/`ffprobe`;
-- наличие тестового mp3 во внешнем образце `/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3`;
-- наличие `token.txt` без печати token;
-- наличие каталогов моделей в `data/models-cache/`;
-- импорт и минимальную готовность нужных Python-библиотек;
-- доступность CUDA, если модель её использует.
-
-Проверяемая цель:
-- команда doctor завершается с exit code 0 или печатает точный список блокеров;
-- token не выводится;
-- в выводе явно перечислены найденные model ids;
-- выбран предварительный ASR-кандидат для smoke-теста.
-
-### Шаг 2. Подготовить рабочую копию mp3
-
-Цель: работать внутри Linux/WSL-проекта, не изменяя внешний исходник.
-
-Скрипт:
-
-`scripts/01_prepare_input.py`
-
-Он должен:
-- принять путь к mp3;
-- проверить, что это mp3;
-- скопировать файл в `data/input/raw/`, если его там ещё нет;
-- посчитать sha256 исходника и рабочей копии;
-- сохранить manifest JSON.
-
-Output:
-
-`data/input/raw/<base>.mp3`
-
-`data/input/raw/<base>.input.json`
-
-Проверяемая цель:
-- рабочая копия существует;
-- sha256 исходника и копии совпадают;
-- manifest содержит исходный путь, рабочий путь, размер, duration, sha256;
-- исходный файл во `/mnt/shared/sound/` не изменён.
-
-### Шаг 3. Создать audio-вариант для моделей
-
-Цель: получить стабильный WAV-вариант, пригодный для ASR и diarization, не изменяя mp3.
-
-Скрипт:
-
-`scripts/02_make_audio_variant.py`
-
-Он должен:
-- принять `data/input/raw/<base>.mp3`;
-- создать WAV, если он нужен backend-ам;
-- сохранить JSON с lineage: source mp3, command, параметры, duration, sha256.
-
-Output:
-
-`data/work/audio/<base>.normalized.wav`
-
-`data/work/audio/<base>.normalized.json`
-
-Проверяемая цель:
-- WAV существует;
-- duration WAV близка к duration mp3;
-- manifest содержит команду преобразования и sha256;
-- повторный запуск без overwrite пропускает готовый результат.
-
-### Шаг 4. Выбрать основной ASR backend по smoke-тесту
-
-Цель: выбрать самый качественный реально работающий ASR, а не самый простой.
-
-Скрипт:
-
-`scripts/03_asr_smoke_compare.py`
-
-Он должен попробовать на тестовом mp3 или его коротком фрагменте:
-- `nvidia/parakeet-tdt-0.6b-v3`;
-- `nvidia/canary-1b-v2`;
-- fallback: `Systran/faster-whisper-large-v3`.
-
-Проверять нужно:
-- модель реально загружается;
-- модель даёт русский текст;
-- есть usable segment-level timestamps;
-- raw output можно сохранить;
-- результат не является пустым или мусорным.
-
-Output:
-
-`data/work/asr/<base>.asr-smoke-report.json`
-
-Проверяемая цель:
-- report содержит статус каждой модели: `ok`, `failed`, `no_timestamps`, `bad_output`;
-- выбран `selected_asr_model`;
-- если NeMo-модели не дают пригодных таймкодов или не запускаются, выбран `Systran/faster-whisper-large-v3`;
-- причина выбора записана явно.
-
-### Шаг 5. Выполнить полный ASR
-
-Цель: получить дословную расшифровку с таймкодами для всего mp3.
-
-Скрипт:
-
-`scripts/04_transcribe.py`
-
-Он должен:
-- использовать `selected_asr_model` из smoke-report или явно переданный model id;
-- обработать полный файл;
-- сохранить raw output;
-- сохранить normalized segments JSON;
-- не перефразировать и не улучшать текст.
-
-Output:
-
-`data/work/asr/<base>.asr.raw.<model>.json`
-
-`data/work/asr/<base>.asr.segments.<model>.json`
-
-Проверяемая цель:
-- raw JSON существует;
-- segments JSON существует;
-- segments не пустые;
-- у каждого segment есть `id`, `start`, `end`, `text`;
-- `start < end`;
-- segment times лежат в пределах duration mp3;
-- русский текст не пустой;
-- повторный запуск без overwrite не перезаписывает результат.
-
-### Шаг 6. Выполнить diarization
-
-Цель: получить локальные speaker labels по времени.
-
-Скрипт:
-
-`scripts/05_diarize.py`
-
-Он должен:
-- использовать `pyannote/speaker-diarization-3.1`;
-- читать token из `token.txt`;
-- не печатать token;
-- сохранить raw output;
-- сохранить normalized diarization segments JSON.
-
-Output:
-
-`data/work/diarization/<base>.diarization.raw.pyannote_speaker-diarization-3.1.json`
-
-`data/work/diarization/<base>.diarization.segments.pyannote_speaker-diarization-3.1.json`
-
-Проверяемая цель:
-- raw diarization JSON существует;
-- normalized diarization JSON существует;
-- есть хотя бы один `SPEAKER_XX`;
-- у каждого segment есть `id`, `start`, `end`, `speaker`;
-- `start < end`;
-- segment times лежат в пределах duration mp3;
-- token не попал в файлы и stdout/stderr.
-
-### Шаг 7. Совместить ASR и diarization
-
-Цель: получить фразы с локальными speaker labels.
-
-Скрипт:
-
-`scripts/06_merge_asr_diarization.py`
-
-Он должен:
-- взять ASR segments JSON;
-- взять diarization segments JSON;
-- назначить каждой ASR-фразе speaker label по пересечению временных интервалов;
-- явно пометить `NO_SPEAKER`, `MIXED`, `OVERLAP`, `UNCERTAIN`, если нельзя назначить чисто;
-- сохранить детали пересечений.
-
-Output:
-
-`data/work/merge/<base>.merged.<asr-model>.pyannote_speaker-diarization-3.1.json`
-
-Проверяемая цель:
-- merged JSON существует;
-- число merged segments равно числу ASR segments или причина расхождения явно записана;
-- у каждого segment есть `start`, `end`, `text`, `speaker_label`, `uncertainty`;
-- нет молчаливого угадывания говорящего при смешанных пересечениях;
-- все speaker labels либо `SPEAKER_XX`, либо явные служебные значения.
-
-### Шаг 7. Автоматически сопоставить голоса с voice profiles
-
-Цель: до ручного именования сравнить `SPEAKER_XX` с enrolled samples в `data/voice_profiles`.
-
-Скрипт:
-
-`scripts/07_voice_identification.py`
-
-Он должен:
-- найти локальные speaker labels в merged JSON;
-- загрузить confirmed enrolled samples из voice profiles;
-- вычислить speaker embeddings через `pyannote/embedding`;
-- сравнить candidate spans с enrolled samples;
-- сохранить candidates, scores, thresholds и status;
-- не спрашивать пользователя и не менять voice profiles.
-
-Output:
-
-`data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.json`
-
-Проверяемая цель:
-- voice-id JSON существует;
-- в нём есть все speaker labels из merged JSON;
-- каждый `SPEAKER_XX` имеет status `matched`/`needs_confirmation`/`no_match`/`no_samples`/`backend_unavailable`;
-- для совпадений есть sample, score и evidence span;
-- profile storage не изменяется этим шагом.
-
-### Шаг 8. Назначить имена локальным говорящим
-
-Цель: создать final file-local mapping, используя voice-id artifact и ручной fallback для нерешённых speaker labels.
-
-Скрипт:
-
-`scripts/08_name_speakers.py`
-
-Он должен:
-- взять merged JSON;
-- взять voice-id JSON;
-- автоматически принять уверенные `matched`;
-- для остальных speaker labels проиграть фрагмент и спросить пользователя;
-- после ручного подтверждения сохранить enrolled sample;
-- сохранить speakers mapping JSON.
-
-Output:
-
-`data/artifacts/08_speakers/<base>.speakers.manual.v1.json`
-
-Проверяемая цель:
-- speakers JSON существует;
-- в нём есть все speaker labels из merged JSON;
-- каждому `SPEAKER_XX` назначено либо имя человека, либо `UNKNOWN`/`UNCERTAIN`;
-- для ручного имени человека есть evidence time range;
-- mapping имеет `scope: file-local`.
-
-### Шаг 9. Экспортировать transcript по ролям
-
-Цель: получить полностью готовый человекочитаемый transcript с именами.
-
-Скрипт:
-
-`scripts/09_export_transcript.py`
-
-Он должен:
-- взять merged JSON;
-- взять speakers JSON;
-- заменить локальные labels на имена там, где они подтверждены;
-- сохранить явные `UNKNOWN`, `NO_SPEAKER`, `MIXED`, `OVERLAP` там, где имени нет;
-- записать header с source mp3, ASR model, diarization model, speakers mapping file, датой генерации.
-
-Output:
-
-`data/artifacts/09_transcript/<base>.transcript.with-names.v1.txt`
-
-Проверяемая цель:
-- transcript существует;
-- в начале указано имя оригинального mp3;
-- каждая реплика имеет формат `HH:MM:SS.mmm | speaker | text`;
-- speaker column содержит имя человека или явную неопределённость;
-- transcript не содержит raw token;
-- transcript можно открыть обычным текстовым редактором.
-
-### Шаг 10. Запустить аудит аномалий диалога
-
-Цель: найти кандидаты на speaker/dialogue anomalies после назначения имён.
-
-Скрипт:
-
-`scripts/10_audit_dialogue_anomalies.py`
-
-Он должен:
-- принимать transcript with names и/или merged JSON + speakers JSON;
-- не менять исходные ASR/diarization/speakers файлы;
-- сохранять только candidates JSON;
-- у каждого кандидата указывать affected time range, текущего speaker, причину, confidence/uncertainty и статус `pending`.
-
-Output:
-
-`data/artifacts/10_audit/<base>.audit.dialogue.v1.json`
-
-Проверяемая цель:
-- candidates JSON существует, даже если список кандидатов пустой;
-- raw и normalized файлы предыдущих шагов не изменены;
-- каждый candidate имеет проверяемый таймкод;
-- аудит не применяет исправления автоматически.
-
-### Шаг 11. Проверить весь pipeline на тестовом mp3
-
-Цель: убедиться, что первая версия даёт полный проверяемый результат end-to-end.
-
-Скрипт:
-
-`scripts/11_check_pipeline_outputs.py`
-
-Он должен проверить наличие и валидность всех обязательных output-файлов для тестового mp3:
-- input manifest;
-- audio variant manifest;
-- ASR raw JSON;
-- ASR segments JSON;
-- diarization raw JSON;
-- diarization segments JSON;
-- merged JSON;
-- voice-id JSON;
-- speakers JSON;
-- transcript with names;
-- audit candidates JSON.
-
-Проверяемая цель:
-- checker печатает `OK` только если все обязательные файлы существуют и проходят базовую валидацию;
-- при ошибке checker пишет конкретный missing/invalid файл и причину;
-- результат можно повторить с нуля на том же mp3.
-
-## 4. Входные данные
-
-Вход первой версии:
-- только mp3;
-- только русский язык;
-- исходные mp3 не изменяются.
-
-Работать удобнее с файлами внутри Linux/WSL-диска проекта, но тестовый образец может браться из:
-
-`/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3`
-
-Этот файл используется как основной экспериментальный пример, потому что в нём много аномалий.
-
-Если mp3 копируется внутрь проекта, копия считается рабочей копией, а не заменой исходника.
+Все исправления, объединения, назначения говорящих, transcript-файлы, review-кандидаты и checks являются отдельными производными artifacts.
+
+Успешный artifact не перезаписывается. Повторный запуск создаёт новую версию `vN`, если передан `--new-version`, или пропускает уже готовый результат.
+
+## 3. Текущая архитектура
+
+Проект строится как набор независимых CLI-скриптов:
+
+| Шаг | Скрипт | Назначение |
+| --- | --- | --- |
+| 00 | `scripts/00_doctor.py` | Проверка окружения, моделей, token и CUDA. |
+| 01 | `scripts/01_prepare_input.py` | Рабочая immutable-копия входного MP3. |
+| 02 | `scripts/02_make_audio_variant.py` | Нормализованный WAV для моделей. |
+| 03 | `scripts/03_asr_smoke_compare.py` | Smoke-сравнение ASR backend. |
+| 04 | `scripts/04_transcribe.py` | Полный ASR. |
+| 05 | `scripts/05_diarize.py` | Diarization. |
+| 06 | `scripts/06_merge_asr_diarization.py` | Merge ASR + diarization. |
+| 07 | `scripts/07_voice_identification.py` | Основной pyannote voice identification. |
+| 07_1 | `scripts/07_1_voice_identification_ecapa.py` | Экспериментальный ECAPA diagnostic backend. |
+| 08 | `scripts/08_name_speakers.py` | Ручное назначение оставшихся имён и enrollment. |
+| 09 | `scripts/09_export_transcript.py` | Transcript with names. |
+| 10 | `scripts/10_role_consistency_review.py` | LLM role-consistency review, без автоправок. |
+| 11 | `scripts/11_build_voice_profile_embeddings.py` | Пересборка/migration voice-profile embedding cache. |
+| 99 | `scripts/99_check_pipeline_outputs.py` | Итоговая проверка обязательных outputs. |
+
+Общая схема:
+
+```text
+00_doctor
+   │
+   ▼
+01_prepare_input
+   │
+   ▼
+02_make_audio_variant
+   │
+   ├───────────────┬────────────────────┐
+   ▼               ▼                    ▼
+03_asr_smoke   04_transcribe        05_diarize
+                   │                    │
+                   └─────────┬──────────┘
+                             ▼
+                         06_merge
+                             │
+             ┌───────────────┴────────────────┐
+             ▼                                ▼
+   07_voice_identification          07_1_voice_identification_ecapa
+             │                       diagnostic optional branch
+             ▼
+      08_name_speakers
+      ручной интерактивный gate
+             │
+             ▼
+        09_transcript
+             │
+             ▼
+  10_role_consistency_review
+
+11_build_voice_profile_embeddings читает data/voice_profiles и может запускаться отдельно после enrollment.
+99_check проверяет обязательные artifacts 01–11.
+```
+
+## 4. Примеры запуска
+
+В примерах ниже `BASE` — имя MP3 без расширения.
+
+```bash
+MP3='/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3'
+BASE="$(basename "$MP3" .mp3)"
+```
+
+Отдельные команды по скриптам:
+
+```bash
+# 00: проверка окружения
+uv run python scripts/00_doctor.py --source-mp3 "$MP3"
+
+# 01: рабочая immutable-копия mp3
+uv run python scripts/01_prepare_input.py "$MP3"
+
+# 02: нормализованный WAV
+uv run python scripts/02_make_audio_variant.py "data/artifacts/01_input/${BASE}.input.v1.mp3"
+
+# 03: ASR smoke compare
+uv run python scripts/03_asr_smoke_compare.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 04: полный ASR
+uv run python scripts/04_transcribe.py \
+  "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav" \
+  --smoke-report "data/artifacts/03_asr_smoke/${BASE}.asr-smoke.v1.json"
+
+# 05: diarization
+uv run python scripts/05_diarize.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 06: merge ASR + diarization
+uv run python scripts/06_merge_asr_diarization.py \
+  "data/artifacts/04_asr/${BASE}.asr.Systran_faster-whisper-large-v3.segments.v1.json" \
+  "data/artifacts/05_diarization/${BASE}.diarization.pyannote_speaker-diarization-3.1.segments.v1.json"
+
+# 07: основной voice-id backend pyannote/embedding
+uv run python scripts/07_voice_identification.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 07_1: экспериментальный diagnostic backend SpeechBrain ECAPA
+uv run python scripts/07_1_voice_identification_ecapa.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 08: ручное назначение имён. Запускать только вручную пользователем.
+uv run python scripts/08_name_speakers.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+
+# 09: экспорт transcript
+uv run python scripts/09_export_transcript.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/08_speakers/${BASE}.speakers.manual.v1.json"
+
+# 10: LLM role-consistency review, без автоправок
+uv run python scripts/10_role_consistency_review.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/08_speakers/${BASE}.speakers.manual.v1.json" \
+  "data/artifacts/09_transcript/${BASE}.transcript.with-names.v1.txt"
+
+# 11: пересборка embedding cache для voice profiles
+uv run python scripts/11_build_voice_profile_embeddings.py --backend all
+
+# 99: итоговая проверка обязательных artifacts
+uv run python scripts/99_check_pipeline_outputs.py "$MP3"
+```
+
+### Общий запуск до ручного шага 08
+
+Эта команда выполняет все неинтерактивные шаги до `08_name_speakers.py`: `00` → `07`.
+Она не запускает `08`, потому что там нужно слушать фрагменты и вводить имена.
+
+```bash
+set -euo pipefail
+MP3='/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3'
+BASE="$(basename "$MP3" .mp3)"
+
+uv run python scripts/00_doctor.py --source-mp3 "$MP3"
+uv run python scripts/01_prepare_input.py "$MP3"
+uv run python scripts/02_make_audio_variant.py "data/artifacts/01_input/${BASE}.input.v1.mp3"
+uv run python scripts/03_asr_smoke_compare.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+uv run python scripts/04_transcribe.py \
+  "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav" \
+  --smoke-report "data/artifacts/03_asr_smoke/${BASE}.asr-smoke.v1.json"
+uv run python scripts/05_diarize.py "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+uv run python scripts/06_merge_asr_diarization.py \
+  "data/artifacts/04_asr/${BASE}.asr.Systran_faster-whisper-large-v3.segments.v1.json" \
+  "data/artifacts/05_diarization/${BASE}.diarization.pyannote_speaker-diarization-3.1.segments.v1.json"
+uv run python scripts/07_voice_identification.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+```
+
+Дальше остановка на ручном gate:
+
+```bash
+uv run python scripts/08_name_speakers.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+```
+
+Интерактивные/ручные шаги запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто проходить `08_name_speakers.py` за пользователя.
 
 ## 5. Рабочая структура файлов
 
 Основная рабочая папка проекта:
 
-`/home/sve/hermesLab/speech-archive`
+```text
+/home/sve/hermesLab/speech-archive
+```
 
-В проекте должны сохраняться:
+В проекте сохраняются:
 
-- `docs/speech-archive-requirements.md` — это ТЗ;
-- `token.txt` — Hugging Face / pyannote token, не выводить содержимое в логи и ответы;
-- `data/models-cache/` — локально скачанные модели;
-- `data/input/raw/` — опциональные рабочие копии исходных mp3;
-- `data/work/audio/` — производные audio-варианты;
-- `data/work/asr/` — результаты распознавания;
-- `data/work/diarization/` — результаты диаризации;
-- `data/work/merge/` — совмещённые ASR + diarization сегменты;
-- `data/work/speakers/` — назначения локальных говорящих в имена людей;
-- `data/work/audit/` — будущие кандидаты аномалий;
-- `data/exports/` — человекочитаемые финальные transcript-файлы.
+```text
+docs/speech-archive-requirements.md
+docs/step_description.md
+README.md
+token.txt                         # Hugging Face / pyannote token, не печатать
+scripts/                          # отдельные stage scripts
+speech_archive_lib/               # общий код, если нужен нескольким scripts
+data/models-cache/                # локальные model caches
+data/artifacts/<NN_stage_name>/   # immutable artifacts по стадиям
+data/voice_profiles/<person_id>/  # profiles, enrolled samples, embedding cache
+```
 
-Если какой-то папки ещё нет, скрипт создаёт её сам.
+Stage directories:
+
+```text
+data/artifacts/00_doctor/
+data/artifacts/01_input/
+data/artifacts/02_audio/
+data/artifacts/03_asr_smoke/
+data/artifacts/04_asr/
+data/artifacts/05_diarization/
+data/artifacts/06_merge/
+data/artifacts/07_voice_identification/
+data/artifacts/07_1_voice_identification_ecapa/
+data/artifacts/08_speakers/
+data/artifacts/09_transcript/
+data/artifacts/10_role_consistency_review/
+data/artifacts/11_voice_profile_embeddings/
+data/artifacts/99_check/
+```
 
 ## 6. Имена файлов
 
-Все производные файлы называются от имени оригинального mp3 без расширения.
+Все производные файлы называются от имени оригинального MP3 без расширения.
 
 Пример исходного файла:
 
-`Яна Ситникова(0079263717233)_20260509182759.mp3`
+```text
+Яна Ситникова(0079263717233)_20260509182759.mp3
+```
 
-Примеры производных файлов:
+Примеры текущих artifact names:
 
-- `Яна Ситникова(0079263717233)_20260509182759.normalized.wav`
-- `Яна Ситникова(0079263717233)_20260509182759.asr.raw.<model>.json`
-- `Яна Ситникова(0079263717233)_20260509182759.asr.segments.<model>.json`
-- `Яна Ситникова(0079263717233)_20260509182759.diarization.raw.<model>.json`
-- `Яна Ситникова(0079263717233)_20260509182759.diarization.segments.<model>.json`
-- `Яна Ситникова(0079263717233)_20260509182759.merged.<asr-model>.<diarization-model>.json`
-- `Яна Ситникова(0079263717233)_20260509182759.speakers.json`
-- `Яна Ситникова(0079263717233)_20260509182759.transcript.with-names.txt`
-- `Яна Ситникова(0079263717233)_20260509182759.audit.candidates.json`
+```text
+data/artifacts/01_input/<base>.input.v1.mp3
+data/artifacts/01_input/<base>.input.v1.manifest.json
+data/artifacts/02_audio/<base>.audio.normalized.v1.wav
+data/artifacts/02_audio/<base>.audio.normalized.v1.manifest.json
+data/artifacts/03_asr_smoke/<base>.asr-smoke.v1.json
+data/artifacts/04_asr/<base>.asr.<model>.raw.v1.json
+data/artifacts/04_asr/<base>.asr.<model>.segments.v1.json
+data/artifacts/04_asr/<base>.asr.<model>.v1.manifest.json
+data/artifacts/05_diarization/<base>.diarization.<model>.raw.v1.json
+data/artifacts/05_diarization/<base>.diarization.<model>.segments.v1.json
+data/artifacts/05_diarization/<base>.diarization.<model>.v1.manifest.json
+data/artifacts/06_merge/<base>.merge.<asr-model>.<diarization-model>.v1.json
+data/artifacts/06_merge/<base>.merge.<asr-model>.<diarization-model>.v1.manifest.json
+data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.json
+data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.manifest.json
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.json
+data/artifacts/08_speakers/<base>.speakers.manual.v1.json
+data/artifacts/08_speakers/<base>.speakers.manual.v1.manifest.json
+data/artifacts/09_transcript/<base>.transcript.with-names.v1.txt
+data/artifacts/09_transcript/<base>.transcript.with-names.v1.manifest.json
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.json
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.raw.txt
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.manifest.json
+data/artifacts/11_voice_profile_embeddings/voice-profile-embeddings.v1.json
+data/artifacts/99_check/<base>.pipeline-check.v1.json
+```
 
-В имени файла model id должен быть безопасным для файловой системы: `/`, пробелы и специальные символы заменяются на `_` или `-`.
+Model id в имени файла должен быть безопасным для файловой системы: `/`, пробелы и специальные символы заменяются на `_` или `-`.
 
-## 7. Доступные модели
+## 7. Доступные модели и backend-и
 
-Локально уже есть кэши моделей в `data/models-cache/`.
+ASR:
 
-Найденные модели:
+- основной текущий backend: `Systran/faster-whisper-large-v3`;
+- `nvidia/parakeet-tdt-0.6b-v3` и `nvidia/canary-1b-v2` могут фиксироваться smoke-report как найденные, но без usable timestamp API для текущей реализации;
+- `faster-whisper-small` допустим только как быстрый fallback/smoke, не как основной качественный результат.
 
-- `Systran/faster-whisper-large-v3`
-- `Systran/faster-whisper-small`
-- `nvidia/canary-1b-v2`
-- `nvidia/parakeet-tdt-0.6b-v3`
-- `pyannote/speaker-diarization-3.1` используется для диаризации при наличии доступа через token.
+Diarization:
 
-Для ASR брать самый качественный доступный вариант, а не самый простой.
+- `pyannote/speaker-diarization-3.1`;
+- token читается из `token.txt` и не печатается.
 
-Первичный выбор ASR:
-- сначала проверить `nvidia/parakeet-tdt-0.6b-v3` и `nvidia/canary-1b-v2` на реальном тестовом mp3;
-- если они дают плохие таймкоды, нестабильны или не запускаются, использовать `Systran/faster-whisper-large-v3`;
-- `faster-whisper-small` использовать только как быстрый smoke/fallback, не как основной качественный результат.
+Voice identification:
 
-Для diarization:
+- основной stage `07`: `pyannote/embedding`;
+- diagnostic stage `07_1`: SpeechBrain ECAPA;
+- телефон/дата из имени файла могут сохраняться как metadata, но не должны выбирать best match вместо voice score.
+
+## 8. Требования по шагам
+
+### Шаг 00. Doctor
+
+`scripts/00_doctor.py` должен проверять:
+
+- `ffmpeg`/`ffprobe`;
+- наличие source MP3, если передан `--source-mp3`;
+- наличие `token.txt`, не печатая token;
+- model cache directories;
+- импорты нужных библиотек;
+- CUDA через torch, если torch доступен.
+
+Outputs:
+
+```text
+data/artifacts/00_doctor/<base>.doctor.v1.json
+data/artifacts/00_doctor/<base>.doctor.v1.manifest.json
+```
+
+### Шаг 01. Prepare input
+
+`scripts/01_prepare_input.py` должен:
+
+- принять путь к MP3;
+- проверить, что это MP3;
+- создать рабочую immutable-копию в `data/artifacts/01_input/`;
+- посчитать sha256 исходника и копии;
+- сохранить manifest.
+
+Outputs:
+
+```text
+data/artifacts/01_input/<base>.input.v1.mp3
+data/artifacts/01_input/<base>.input.v1.manifest.json
+```
+
+### Шаг 02. Make audio variant
+
+`scripts/02_make_audio_variant.py` должен:
+
+- читать artifact шага 01;
+- создать WAV 16 kHz mono для ASR/diarization/voice-id;
+- сохранить lineage, ffmpeg command, duration и hash.
+
+Outputs:
+
+```text
+data/artifacts/02_audio/<base>.audio.normalized.v1.wav
+data/artifacts/02_audio/<base>.audio.normalized.v1.manifest.json
+```
+
+### Шаг 03. ASR smoke compare
+
+`scripts/03_asr_smoke_compare.py` должен:
+
+- запустить доступные ASR backend-и на коротком фрагменте;
+- не сохранять временный фрагмент как evidence artifact;
+- выбрать usable ASR backend;
+- записать причину выбора.
+
+Outputs:
+
+```text
+data/artifacts/03_asr_smoke/<base>.asr-smoke.v1.json
+data/artifacts/03_asr_smoke/<base>.asr-smoke.v1.manifest.json
+```
+
+### Шаг 04. Transcribe
+
+`scripts/04_transcribe.py` должен:
+
+- читать audio artifact и smoke report или явно заданный `--model`;
+- распознавать весь файл на русском языке;
+- сохранять raw output и normalized segments;
+- не перефразировать и не улучшать текст.
+
+Outputs:
+
+```text
+data/artifacts/04_asr/<base>.asr.Systran_faster-whisper-large-v3.raw.v1.json
+data/artifacts/04_asr/<base>.asr.Systran_faster-whisper-large-v3.segments.v1.json
+data/artifacts/04_asr/<base>.asr.Systran_faster-whisper-large-v3.v1.manifest.json
+```
+
+### Шаг 05. Diarize
+
+`scripts/05_diarize.py` должен:
+
+- читать audio artifact;
 - использовать `pyannote/speaker-diarization-3.1`;
-- token читать из `token.txt`;
-- token никогда не печатать в stdout/stderr, отчётах, логах или transcript-файлах.
+- читать token из `token.txt`, не печатая token;
+- сохранять raw diarization и normalized speaker segments.
 
-## 8. Распознавание речи
-
-ASR должен получать дословную речь с таймкодами.
-
-Запрещено:
-- перефразировать;
-- литературно улучшать;
-- сглаживать речь;
-- добавлять слова;
-- заменять сырую речь красивым текстом;
-- исправлять смысл по догадке.
-
-Сохранять нужно минимум два слоя:
-
-1. Raw output модели как есть или максимально близко к нативному формату модели.
-2. Нормализованный `segments.json`, пригодный для следующих шагов.
-
-Минимальный формат ASR segments:
-
-```json
-{
-  "source_mp3": "имя.mp3",
-  "model": "model-id",
-  "language": "ru",
-  "segments": [
-    {
-      "id": 1,
-      "start": 0.0,
-      "end": 3.42,
-      "text": "дословный текст",
-      "confidence": null,
-      "raw_ref": "ссылка/индекс на raw output"
-    }
-  ]
-}
-```
-
-Если модель даёт word-level timings, их сохранять отдельным полем или отдельным файлом. Не выбрасывать.
-
-## 9. Диаризация
-
-Диаризация должна определять, кто говорил когда.
-
-Первичная диаризация даёт только локальные метки внутри конкретного файла:
-
-- `SPEAKER_00`
-- `SPEAKER_01`
-- `SPEAKER_02`
-- и т.д.
-
-Эти метки не являются именами людей и не переносятся между файлами как стабильные личности.
-
-Сохранять нужно минимум два слоя:
-
-1. Raw diarization output.
-2. Нормализованный `diarization.segments.json`.
-
-Минимальный формат diarization segments:
-
-```json
-{
-  "source_mp3": "имя.mp3",
-  "model": "pyannote/speaker-diarization-3.1",
-  "segments": [
-    {
-      "id": 1,
-      "start": 0.0,
-      "end": 2.7,
-      "speaker": "SPEAKER_00",
-      "confidence": null,
-      "raw_ref": "ссылка/индекс на raw output"
-    }
-  ]
-}
-```
-
-## 10. Совмещение ASR и diarization
-
-Отдельный merge-скрипт совмещает ASR-сегменты с diarization-сегментами.
-
-Результат merge не изменяет ASR и diarization raw files.
-
-Если ASR-фраза пересекается с несколькими говорящими:
-- не угадывать молча;
-- пометить как `MIXED` или `OVERLAP`, если это видно по пересечениям;
-- сохранить детали пересечения;
-- в transcript можно показать наиболее вероятного говорящего только если правило явно задано и рядом сохранена uncertainty-пометка.
-
-Минимальный формат merged segments:
-
-```json
-{
-  "source_mp3": "имя.mp3",
-  "asr_model": "model-id",
-  "diarization_model": "model-id",
-  "segments": [
-    {
-      "id": 1,
-      "start": 0.0,
-      "end": 3.42,
-      "speaker_label": "SPEAKER_00",
-      "speaker_name": null,
-      "text": "дословный текст",
-      "uncertainty": [],
-      "overlaps": []
-    }
-  ]
-}
-```
-
-## 11. Назначение имён говорящим
-
-Перед запуском модели/скрипта, который ищет аномалии диалога, локальным говорящим должны быть назначены имена людей там, где это возможно.
-
-В первой версии назначение имён делается по образцу голоса, но сами sample-файлы не сохраняются.
-
-Процесс первой версии:
-
-1. Скрипт выбирает короткий атомарный фрагмент для локального `SPEAKER_XX` из текущего mp3.
-2. Пользователь слушает фрагмент из исходного mp3 по таймкоду или через временное воспроизведение.
-3. Пользователь говорит, кто это.
-4. Скрипт сохраняет mapping локального speaker label в имя человека для этого файла.
-5. Если пользователь говорит “непонятно”, скрипт предлагает другой фрагмент этого же локального speaker label.
-6. Если фрагмент содержит overlap, несколько говорящих, шум или непригоден, он не используется как основание для назначения имени.
-
-В первой версии запрещено:
-- сохранять отдельные sample-файлы в постоянное хранилище;
-- создавать базу голосов;
-- переносить назначение `SPEAKER_XX -> имя` на другой mp3 без отдельного подтверждения;
-- угадывать имя по тексту реплики;
-- назначать имя по содержанию разговора без подтверждения голоса.
-
-Файл назначений:
-
-`<base>.speakers.json`
-
-Формат:
-
-```json
-{
-  "source_mp3": "имя.mp3",
-  "scope": "file-local",
-  "assignments": {
-    "SPEAKER_00": {
-      "name": "Вячеслав",
-      "method": "manual_voice_confirmation",
-      "evidence": {
-        "start": 12.34,
-        "end": 15.67,
-        "note": "пользователь подтвердил по прослушиванию"
-      }
-    },
-    "SPEAKER_01": {
-      "name": "Яна",
-      "method": "manual_voice_confirmation",
-      "evidence": {
-        "start": 20.0,
-        "end": 24.1,
-        "note": "пользователь подтвердил по прослушиванию"
-      }
-    },
-    "SPEAKER_02": {
-      "name": "UNKNOWN",
-      "method": "manual_uncertain",
-      "evidence": null
-    }
-  }
-}
-```
-
-`UNKNOWN`, `MIXED`, `OVERLAP`, `NO_SPEAKER` не считаются именами людей.
-
-## 12. Финальный transcript первой версии
-
-Финальный результат первой версии — полностью готовый текстовый файл по ролям.
-
-Файл:
-
-`<base>.transcript.with-names.txt`
-
-В начале файла обязательно указать:
-
-- название оригинального mp3;
-- ASR model;
-- diarization model;
-- speakers mapping file;
-- дату/время генерации;
-- предупреждение, что текст дословный ASR, а speaker names являются производным слоем.
-
-Формат строки transcript:
+Outputs:
 
 ```text
-00:01:23.450 | Яна | текст фразы
+data/artifacts/05_diarization/<base>.diarization.pyannote_speaker-diarization-3.1.raw.v1.json
+data/artifacts/05_diarization/<base>.diarization.pyannote_speaker-diarization-3.1.segments.v1.json
+data/artifacts/05_diarization/<base>.diarization.pyannote_speaker-diarization-3.1.v1.manifest.json
 ```
 
-Если имя человека неизвестно:
+### Шаг 06. Merge ASR + diarization
+
+`scripts/06_merge_asr_diarization.py` должен:
+
+- читать ASR segments и diarization segments;
+- назначать speaker label по временному overlap;
+- сохранять uncertainty markers `NO_SPEAKER`, `MIXED`, `OVERLAP`, `UNCERTAIN` при неоднозначности;
+- не менять ASR/diarization artifacts.
+
+Outputs:
 
 ```text
-00:01:23.450 | SPEAKER_02/UNKNOWN | текст фразы
+data/artifacts/06_merge/<base>.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json
+data/artifacts/06_merge/<base>.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.manifest.json
 ```
 
-Если говорящий не определён:
+### Шаг 07. Voice identification
+
+`scripts/07_voice_identification.py` должен:
+
+- читать merge artifact;
+- читать audio artifact для probe spans;
+- загружать confirmed enrolled samples из `data/voice_profiles/`;
+- вычислять embeddings через `pyannote/embedding`;
+- сохранять candidates, score matrix, best match, thresholds и status;
+- не спрашивать пользователя;
+- не изменять voice profiles.
+
+Возможные статусы:
 
 ```text
-00:01:23.450 | NO_SPEAKER | текст фразы
+matched
+needs_confirmation
+no_match
+no_samples
+no_candidate_span
+backend_unavailable
+error
 ```
 
-Если фраза смешанная или overlap:
+Outputs:
 
 ```text
-00:01:23.450 | MIXED/OVERLAP | текст фразы
+data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.json
+data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.manifest.json
 ```
 
-Требуемые поля в каждой строке:
-- время начала фразы;
-- кто говорит;
-- содержимое фразы.
+### Шаг 07_1. Voice identification ECAPA diagnostic
 
-Время форматировать как:
+`scripts/07_1_voice_identification_ecapa.py` должен:
 
-`HH:MM:SS.mmm`
+- читать те же входы, что stage 07;
+- использовать SpeechBrain ECAPA backend;
+- писать отдельный diagnostic artifact;
+- не заменять основной stage 07;
+- не делать auto-match обязательным до калибровки.
 
-## 13. Контекстный аудит диалога
+Outputs:
 
-Аудит аномалий диалога запускается только после создания transcript с именами людей.
+```text
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.json
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.manifest.json
+```
 
-Цель аудита — найти подозрительные места, где назначение говорящего может быть ошибочным или где диалог выглядит аномально.
+### Шаг 08. Name speakers
 
-Примеры:
-- одна фраза разорвана между разными говорящими;
-- один говорящий будто договаривает фразу другого;
-- сегмент выглядит смешанным;
-- строка логически относится к соседней реплике;
-- смена говорящего выглядит нелогичной;
-- реплика приписана человеку, но контекстно больше похожа на соседнего говорящего;
-- overlap/echo/шум могли исказить speaker assignment.
+`scripts/08_name_speakers.py` — ручной интерактивный gate.
 
-Аудит не должен применять исправления автоматически.
+Он должен:
 
-Он должен только создавать файл кандидатов на ручную проверку:
+- читать merge artifact и voice-id artifact;
+- автоматически принять только уверенные `matched` из stage 07;
+- для unresolved speakers проигрывать фрагменты и спрашивать пользователя;
+- сохранять file-local speaker mapping;
+- при ручном подтверждении человека сохранять enrolled sample из source/input MP3;
+- не сохранять samples для `unknown`/`skip`;
+- не менять merge и voice-id artifacts.
 
-`<base>.audit.candidates.json`
+Этот шаг должен запускать пользователь вручную в своём терминале и аудио-окружении.
 
-Аудит не имеет права изменять:
-- исходный mp3;
+Outputs:
+
+```text
+data/artifacts/08_speakers/<base>.speakers.manual.v1.json
+data/artifacts/08_speakers/<base>.speakers.manual.v1.manifest.json
+data/voice_profiles/<person_id>/profile.json
+data/voice_profiles/<person_id>/samples/enrolled/<sample_id>.mp3
+data/voice_profiles/<person_id>/samples/enrolled/<sample_id>.json
+```
+
+### Шаг 09. Export transcript
+
+`scripts/09_export_transcript.py` должен:
+
+- читать merge artifact и speakers artifact;
+- подставлять подтверждённые имена вместо `SPEAKER_XX`;
+- сохранять явные `UNKNOWN`, `NO_SPEAKER`, `MIXED`, `OVERLAP` там, где имя не подтверждено;
+- создавать человекочитаемый transcript.
+
+Формат строки:
+
+```text
+HH:MM:SS.mmm | speaker | text
+```
+
+Outputs:
+
+```text
+data/artifacts/09_transcript/<base>.transcript.with-names.v1.txt
+data/artifacts/09_transcript/<base>.transcript.with-names.v1.manifest.json
+```
+
+### Шаг 10. Role consistency review
+
+`scripts/10_role_consistency_review.py` должен:
+
+- читать merge, speakers и transcript;
+- вызвать реальный LLM через Hermes CLI;
+- найти candidates, где текущий говорящий плохо согласуется с соседним контекстом;
+- не использовать заранее заданные доменные правила, participant facts, phrase lists или хардкод;
+- считать names/labels непрозрачными идентификаторами;
+- не исправлять данные автоматически;
+- сохранять structured JSON review и raw LLM response.
+
+Outputs:
+
+```text
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.json
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.raw.txt
+data/artifacts/10_role_consistency_review/<base>.role-consistency-review.hermes.v1.manifest.json
+```
+
+### Шаг 11. Build voice profile embeddings
+
+`scripts/11_build_voice_profile_embeddings.py` должен:
+
+- читать confirmed enrolled samples из `data/voice_profiles/<person_id>/samples/enrolled/`;
+- строить unified embedding cache;
+- поддерживать backend-и `pyannote`, `ecapa`, `all`;
+- сохранять per-profile embedding files;
+- сохранять общий report artifact;
+- не спрашивать пользователя.
+
+Outputs:
+
+```text
+data/voice_profiles/<person_id>/voice_embeddings/<backend>/<model>/<sample>.json
+data/artifacts/11_voice_profile_embeddings/voice-profile-embeddings.v1.json
+data/artifacts/11_voice_profile_embeddings/voice-profile-embeddings.v1.manifest.json
+```
+
+### Шаг 99. Check pipeline outputs
+
+`scripts/99_check_pipeline_outputs.py` должен проверить latest artifacts обязательных stage outputs:
+
+- 01 input MP3 + manifest;
+- 02 audio WAV + manifest;
+- 03 ASR smoke JSON;
+- 04 ASR raw + segments;
+- 05 diarization raw + segments;
+- 06 merge;
+- 07 voice-id;
+- 08 speakers;
+- 09 transcript;
+- 10 role-consistency review;
+- 11 voice-profile embeddings report.
+
+Output:
+
+```text
+data/artifacts/99_check/<base>.pipeline-check.v1.json
+```
+
+Checker должен печатать `OK` только если обязательные файлы существуют и проходят базовую валидацию. При ошибке он должен указывать конкретный missing/invalid файл и причину.
+
+## 9. Ручные и интерактивные этапы
+
+Интерактивные/ручные этапы нельзя запускать скрыто агентом.
+
+Сейчас ручной gate:
+
+```text
+scripts/08_name_speakers.py
+```
+
+Причина:
+
+- пользователь должен слышать фрагменты;
+- пользователь вводит имена;
+- пользователь подтверждает создание/использование voice profile;
+- результат влияет на enrollment samples и дальнейшее voice-id качество.
+
+Нормальный запуск:
+
+```bash
+uv run python scripts/08_name_speakers.py \
+  "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
+  "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
+  --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
+```
+
+`--ci-non-interactive` и `--debug-no-play` допустимы только для CI/debug и должны быть явно помечены как не нормальный пользовательский workflow.
+
+## 10. Voice profiles
+
+Voice profile storage:
+
+```text
+data/voice_profiles/
+  <person_id>/
+    profile.json
+    samples/
+      enrolled/
+        <sample_id>.mp3
+        <sample_id>.json
+    voice_embeddings/
+      <backend>/
+        <model>/
+          <sample_id>.json
+```
+
+Правила:
+
+- `SPEAKER_XX` — file-local label, не глобальный человек;
+- profile identity хранится отдельно от file-local assignments;
+- confirmed enrolled sample сохраняется только после ручного голосового подтверждения;
+- `unknown`/`skip` не создают physical sample;
+- phone/date metadata из filename — metadata/prior, но не evidence для выбора voice match;
+- embedding cache пересобирается отдельным stage 11.
+
+## 11. Transcript и review
+
+Transcript stage 09 — человекочитаемый текстовый файл, но не замена raw ASR.
+
+Role consistency stage 10 — derived review layer. Он создаёт candidates, но не применяет исправления.
+
+Если review нашёл кандидаты, применение должно быть отдельным ручным решением и отдельным будущим correction artifact. Stage 10 не имеет права менять:
+
+- исходный MP3;
 - raw ASR output;
 - raw diarization output;
-- normalized ASR segments;
-- normalized diarization segments;
-- speakers mapping.
+- merge artifact;
+- speakers mapping;
+- transcript.
 
-## 14. Поиск
-
-Поиск — следующий этап после первой версии transcript pipeline.
-
-Будущий поиск должен работать по всем сырым ASR-гипотезам, а не только по одному итоговому transcript.
-
-Нужное слово или фраза не должны теряться только потому, что их распознала одна модель.
-
-До появления SQLite поиск может быть отдельным файловым скриптом, который проходит по `*.asr.segments.*.json` и/или raw ASR outputs.
-
-## 15. Неопределённость
+## 12. Неопределённость
 
 Система должна явно показывать неопределённость.
 
 Возможные состояния:
-- известный говорящий;
-- неизвестный говорящий;
-- низкая уверенность;
-- mixed;
-- overlap;
-- no speaker;
+
+- known speaker;
+- unknown speaker;
+- low confidence;
+- `MIXED`;
+- `OVERLAP`;
+- `NO_SPEAKER`;
+- `UNCERTAIN`;
 - непригодный фрагмент;
 - требуется ручная проверка.
 
 Нельзя выдавать предположение за факт.
 
-Если уверенность низкая, нужно писать `UNKNOWN`, `UNCERTAIN`, `MIXED`, `OVERLAP` или аналогичную явную пометку, а не угадывать имя.
+## 13. Массовая обработка и повторные запуски
 
-## 16. Массовая обработка
-
-Система должна быть пригодна для пакетной обработки архива mp3.
-
-Повторный запуск должен продолжать работу, а не начинать заново.
+Система должна быть пригодна для пакетной обработки архива MP3.
 
 Скрипты не должны:
-- дублировать результаты;
-- перезаписывать успешную обработку без явного разрешения;
+
+- дублировать результаты без необходимости;
+- перезаписывать successful artifacts без явного `--new-version`;
 - удалять пользовательские данные;
 - удалять raw outputs моделей.
 
 Каждый скрипт должен печатать понятный статус:
+
 - что обработано;
 - что пропущено, потому что уже готово;
 - где ошибка;
-- какой output-файл создан.
+- какой output создан.
 
-## 17. Локальность и безопасность
+## 14. Локальность и безопасность
 
 Система должна работать локально.
 
 Запрещено:
+
 - изменять оригиналы;
 - удалять пользовательские данные без разрешения;
 - скрыто отправлять аудио наружу;
 - печатать или сохранять token из `token.txt` в открытом виде;
 - принимать внешние лицензии от имени пользователя;
-- использовать старый архивированный код проекта как источник логики.
+- использовать старый архивированный код проекта как источник логики без отдельного разрешения.
 
 Разрешено:
+
 - использовать уже скачанные локальные модели;
-- использовать `token.txt` для доступа к pyannote/Hugging Face, если это нужно для запуска модели;
+- использовать `token.txt` для доступа к pyannote/Hugging Face;
 - создавать производные рабочие файлы внутри проекта.
 
-## 18. Старый код
+## 15. Критерий готовности текущей версии
 
-Старый код проекта был заархивирован и удалён из рабочей папки.
+Текущая версия считается готовой для тестового MP3, когда созданы и проходят `99_check_pipeline_outputs.py`:
 
-Его нельзя использовать как основу новой реализации.
+1. input MP3 artifact и manifest;
+2. normalized audio artifact и manifest;
+3. ASR smoke report;
+4. ASR raw output;
+5. ASR normalized segments JSON;
+6. diarization raw output;
+7. diarization normalized segments JSON;
+8. merged ASR + diarization JSON;
+9. voice-id JSON;
+10. speakers manual JSON;
+11. transcript with names TXT;
+12. role-consistency review JSON;
+13. voice-profile embeddings report JSON;
+14. pipeline check JSON.
 
-Новая реализация должна исходить только из:
-- этого ТЗ;
-- локальных моделей в `data/models-cache/`;
-- `token.txt`;
-- тестового mp3 из `/mnt/shared/sound/`;
-- новых решений, явно принятых после этого ТЗ.
+Качество результата определяется не красотой пересказа, а проверяемостью:
 
-Если при разработке возникнет желание посмотреть старый код, этого делать нельзя без отдельного явного разрешения пользователя.
-
-## 19. Критерий готовности первой версии
-
-Первая версия считается готовой, когда для тестового mp3:
-
-`/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3`
-
-получены и сохранены:
-
-1. ASR raw output.
-2. ASR normalized segments JSON.
-3. Diarization raw output.
-4. Diarization normalized segments JSON.
-5. Merged ASR + diarization JSON.
-6. Speaker names mapping JSON, где известным локальным говорящим назначены имена людей по прослушиванию голосовых фрагментов.
-7. Финальный transcript по ролям:
-   - в начале название оригинального mp3;
-   - в каждой строке время начала фразы;
-   - говорящий: имя человека или явная неопределённость;
-   - дословный текст фразы.
-
-После этого можно запускать отдельный этап поиска аномалий диалога.
-
-## 20. Критерий качества первой версии
-
-Результат первой версии должен быть не красивым пересказом, а проверяемым рабочим артефактом.
-
-Обязательные свойства:
 - все исходные и raw данные сохранены;
-- transcript можно сверить с исходным mp3 по таймкодам;
-- speaker names назначены до анализа аномалий;
+- transcript можно сверить с исходным MP3 по таймкодам;
+- speaker names назначены до semantic review;
 - неизвестные/спорные говорящие явно помечены;
-- любой следующий шаг может использовать файлы предыдущего шага;
-- если шаг не может быть выполнен, причина должна быть явно записана в выводе скрипта или отдельном error-файле.
+- каждый downstream step читает artifacts предыдущих или профильных шагов;
+- если шаг не может быть выполнен, причина явно записана в stdout/stderr или artifact/report.
