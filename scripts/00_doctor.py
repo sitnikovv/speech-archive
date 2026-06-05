@@ -9,13 +9,12 @@ if str(ROOT) not in sys.path:
 import argparse, json, shutil
 from speech_archive_lib import artifacts, io_utils, env
 
-TEST_MP3 = Path('/mnt/shared/sound/Яна Ситникова(0079263717233)_20260509182759.mp3')
 MODELS = ['Systran/faster-whisper-large-v3','Systran/faster-whisper-small','nvidia/canary-1b-v2','nvidia/parakeet-tdt-0.6b-v3','pyannote/speaker-diarization-3.1']
 
 def main() -> int:
-    ap = argparse.ArgumentParser(); ap.add_argument('--source-mp3', default=str(TEST_MP3)); ap.add_argument('--new-version', action='store_true'); ap.add_argument('--json', action='store_true')
-    args = ap.parse_args(); source = Path(args.source_mp3); data = ROOT/'data'; artifacts.ensure_dirs(ROOT)
-    stage = artifacts.stage_dir(data, '00', 'doctor'); stem = artifacts.base_name(source) + '.doctor'
+    ap = argparse.ArgumentParser(); ap.add_argument('--source-mp3'); ap.add_argument('--new-version', action='store_true'); ap.add_argument('--json', action='store_true')
+    args = ap.parse_args(); source = Path(args.source_mp3) if args.source_mp3 else None; data = ROOT/'data'; artifacts.ensure_dirs(ROOT)
+    stage = artifacts.stage_dir(data, '00', 'doctor'); stem = (artifacts.base_name(source) if source else 'environment') + '.doctor'
     out = artifacts.latest_versioned_path(stage, stem, '.json') if not args.new_version else None
     if out and out.exists():
         report = io_utils.read_json(out)
@@ -33,9 +32,9 @@ def main() -> int:
         except Exception as e: cuda = {'error': str(e)}
     blockers=[]
     if not shutil.which('ffmpeg') or not shutil.which('ffprobe'): blockers.append('ffmpeg/ffprobe missing')
-    if not source.exists(): blockers.append(f'source mp3 missing: {source}')
+    if source is not None and not source.exists(): blockers.append(f'source mp3 missing: {source}')
     if not (ROOT/'token.txt').exists(): blockers.append('token.txt missing')
-    report={'artifact': str(out), 'stage':'00_doctor','script':'scripts/00_doctor.py','source_mp3':str(source),'ffmpeg':shutil.which('ffmpeg'),'ffprobe':shutil.which('ffprobe'),'token_txt_exists':(ROOT/'token.txt').exists(),'token_printed':False,'models':found,'libraries':libs,'cuda':cuda,'blockers':blockers,'status':'OK' if not blockers else 'BLOCKED','created_at':io_utils.utc_now()}
+    report={'artifact': str(out), 'stage':'00_doctor','script':'scripts/00_doctor.py','source_mp3':str(source) if source else None,'ffmpeg':shutil.which('ffmpeg'),'ffprobe':shutil.which('ffprobe'),'token_txt_exists':(ROOT/'token.txt').exists(),'token_printed':False,'models':found,'libraries':libs,'cuda':cuda,'blockers':blockers,'status':'OK' if not blockers else 'BLOCKED','created_at':io_utils.utc_now()}
     io_utils.write_json(out, report)
     man = artifacts.manifest_for(out); io_utils.write_json(man, {'stage':'00_doctor','output_artifacts':[{'path':str(out),'sha256':io_utils.sha256_file(out)}],'status':report['status'],'created_at':io_utils.utc_now()})
     if args.json: print(json.dumps(report, ensure_ascii=False, indent=2))

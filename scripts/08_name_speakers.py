@@ -60,7 +60,7 @@ def choose_spans(segments, label, max_count=5):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description='Step 08: assign unresolved file-local SPEAKER_XX labels to people.')
+    ap = argparse.ArgumentParser(description='Step 08: materialize file-local speaker mapping; prompt only for unresolved SPEAKER_XX labels.')
     ap.add_argument('merged')
     ap.add_argument('voice_identification')
     ap.add_argument('--audio', required=True)
@@ -165,16 +165,19 @@ def main() -> int:
     artifacts.ensure_dirs(ROOT); stage=artifacts.stage_dir(ROOT/'data','08','speakers'); stem=f'{base}.speakers.manual'
     existing=artifacts.latest_versioned_path(stage,stem,'.json') if not args.new_version else None
     if existing and existing.exists(): print(existing); return 0
-    if not args.ci_non_interactive:
-        enable_utf8_erase()
     profiles_root=Path(args.voice_profiles_dir)
-    profiles_root.mkdir(parents=True, exist_ok=True)
     call_meta=voice_profiles.parse_call_filename(source_mp3)
     profiles=voice_profiles.load_profiles(profiles_root)
     phone_resolution=voice_profiles.resolve_phone_profiles(profiles,call_meta.get('phone_e164'),call_meta.get('call_datetime'))
     original_mp3=voice_profiles.find_source_mp3(ROOT, source_mp3, args.source_mp3)
     labels=sorted({s.get('speaker_label') for s in merged.get('segments',[]) if str(s.get('speaker_label','')).startswith('SPEAKER_')})
     assignments=voice_identity.assignments_from_voice_id(voice_id); enrolled_samples=[]; profile_updates=[]
+    unresolved_labels=[label for label in labels if label not in assignments]
+    auto_materialized=not unresolved_labels
+    if auto_materialized:
+        print('All speakers were matched by stage 07; materializing speakers artifact without prompts.')
+    elif not args.ci_non_interactive:
+        enable_utf8_erase()
     for label in labels:
         if label in assignments:
             continue
@@ -204,7 +207,7 @@ def main() -> int:
                 method='manual_voice_confirmation_without_profile'
         assignments[label]={'name':name,'method':method,'evidence':evidence}
     v=artifacts.next_version(stage,stem,'.json'); out=artifacts.versioned_path(stage,stem,'.json',v); man=artifacts.manifest_for(out)
-    data={'artifact':str(out),'stage':'08_speakers','source_mp3':source_mp3,'scope':'file-local','created_at':io_utils.utc_now(),'source_metadata':call_meta,'voice_profiles_dir':str(profiles_root),'phone_resolution':phone_resolution,'voice_identification_file':str(voice_id_p),'profile_updates':profile_updates,'enrolled_samples':enrolled_samples,'assignments':assignments}
+    data={'artifact':str(out),'stage':'08_speakers','source_mp3':source_mp3,'scope':'file-local','mode':'auto_from_stage_07' if auto_materialized else 'manual_for_unresolved_speakers','unresolved_labels_before_manual':unresolved_labels,'created_at':io_utils.utc_now(),'source_metadata':call_meta,'voice_profiles_dir':str(profiles_root),'phone_resolution':phone_resolution,'voice_identification_file':str(voice_id_p),'profile_updates':profile_updates,'enrolled_samples':enrolled_samples,'assignments':assignments}
     io_utils.write_json(out,data); outputs=[{'path':str(out),'sha256':io_utils.sha256_file(out)}]
     for sample in enrolled_samples:
         outputs.append({'path':sample['sample'],'sha256':io_utils.sha256_file(Path(sample['sample']))})

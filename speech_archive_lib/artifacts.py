@@ -51,19 +51,19 @@ def paths_for(data_dir: Path, base: str, asr_model: str = "selected", diar_model
     asr = safe_model_id(asr_model)
     dia = safe_model_id(diar_model)
     return ArtifactPaths(
-        input_mp3=data_dir / "input" / "raw" / f"{base}.mp3",
-        input_manifest=data_dir / "input" / "raw" / f"{base}.input.json",
-        audio_wav=data_dir / "work" / "audio" / f"{base}.normalized.wav",
-        audio_manifest=data_dir / "work" / "audio" / f"{base}.normalized.json",
-        asr_smoke_report=data_dir / "work" / "asr" / f"{base}.asr-smoke-report.json",
-        asr_raw=data_dir / "work" / "asr" / f"{base}.asr.raw.{asr}.json",
-        asr_segments=data_dir / "work" / "asr" / f"{base}.asr.segments.{asr}.json",
-        diarization_raw=data_dir / "work" / "diarization" / f"{base}.diarization.raw.{dia}.json",
-        diarization_segments=data_dir / "work" / "diarization" / f"{base}.diarization.segments.{dia}.json",
-        merged=data_dir / "work" / "merge" / f"{base}.merged.{asr}.{dia}.json",
-        speakers=data_dir / "work" / "speakers" / f"{base}.speakers.json",
-        transcript=data_dir / "exports" / f"{base}.transcript.with-names.txt",
-        audit_candidates=data_dir / "work" / "audit" / f"{base}.audit.candidates.json",
+        input_mp3=stage_dir(data_dir, "01", "input") / f"{base}.input.v1.mp3",
+        input_manifest=stage_dir(data_dir, "01", "input") / f"{base}.input.v1.manifest.json",
+        audio_wav=stage_dir(data_dir, "02", "audio") / f"{base}.audio.normalized.v1.wav",
+        audio_manifest=stage_dir(data_dir, "02", "audio") / f"{base}.audio.normalized.v1.manifest.json",
+        asr_smoke_report=stage_dir(data_dir, "03", "asr_smoke") / f"{base}.asr-smoke.v1.json",
+        asr_raw=stage_dir(data_dir, "04", "asr") / f"{base}.asr.{asr}.raw.v1.json",
+        asr_segments=stage_dir(data_dir, "04", "asr") / f"{base}.asr.{asr}.segments.v1.json",
+        diarization_raw=stage_dir(data_dir, "05", "diarization") / f"{base}.diarization.{dia}.raw.v1.json",
+        diarization_segments=stage_dir(data_dir, "05", "diarization") / f"{base}.diarization.{dia}.segments.v1.json",
+        merged=stage_dir(data_dir, "06", "merge") / f"{base}.merge.{asr}.{dia}.v1.json",
+        speakers=stage_dir(data_dir, "08", "speakers") / f"{base}.speakers.manual.v1.json",
+        transcript=stage_dir(data_dir, "09", "transcript") / f"{base}.transcript.with-names.v1.txt",
+        audit_candidates=stage_dir(data_dir, "10", "role_consistency_review") / f"{base}.role-consistency-review.hermes.v1.json",
     )
 
 

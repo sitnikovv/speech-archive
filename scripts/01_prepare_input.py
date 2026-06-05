@@ -22,6 +22,6 @@ def main() -> int:
     if src_hash!=out_hash: raise SystemExit('sha256 mismatch after copy')
     meta=io_utils.ffprobe(out).get('format',{})
     manifest=artifacts.versioned_path(stage, man_stem, '.manifest.json', v)
-    data={'artifact':str(out),'stage':'01_input','script':'scripts/01_prepare_input.py','source_path':str(src),'size':out.stat().st_size,'duration':float(meta.get('duration',0.0)),'format_name':meta.get('format_name'),'bit_rate':meta.get('bit_rate'),'sha256':out_hash,'created_at':io_utils.utc_now()}
+    data={'artifact':str(out),'stage':'01_input','script':'scripts/01_prepare_input.py','source_path':str(src),'input_artifacts':[{'path':str(src),'sha256':src_hash}],'output_artifacts':[{'path':str(out),'sha256':out_hash}],'size':out.stat().st_size,'duration':float(meta.get('duration',0.0)),'format_name':meta.get('format_name'),'bit_rate':meta.get('bit_rate'),'sha256':out_hash,'created_at':io_utils.utc_now()}
     io_utils.write_json(manifest,data); print(out); return 0
 if __name__=='__main__': raise SystemExit(main())

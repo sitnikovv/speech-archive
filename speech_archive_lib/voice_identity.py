@@ -184,36 +184,47 @@ def backend_embedding_cache_path(sample: Path, backend_name: str, model_id: str)
     return voice_embedding_cache_path(sample, backend_name, model_id)
 
 
-def cached_sample_embedding(embedder: Embedder, sample: Path) -> list[float]:
+def cached_sample_embedding(embedder: Embedder, sample: Path, *, write_cache: bool = True) -> list[float]:
     cache = embedding_cache_path(sample, embedder.model_id)
-    return cached_sample_embedding_at(cache, embedder, sample)
+    return cached_sample_embedding_at(cache, embedder, sample, write_cache=write_cache)
 
 
-def cached_sample_embedding_for_backend(embedder: Embedder, sample: Path, backend_name: str) -> list[float]:
+def cached_sample_embedding_for_backend(
+    embedder: Embedder,
+    sample: Path,
+    backend_name: str,
+    *,
+    write_cache: bool = True,
+) -> list[float]:
     cache = backend_embedding_cache_path(sample, backend_name, embedder.model_id)
-    return cached_sample_embedding_at(cache, embedder, sample)
+    return cached_sample_embedding_at(cache, embedder, sample, write_cache=write_cache)
 
 
-def cached_sample_embedding_at(cache: Path, embedder: Embedder, sample: Path) -> list[float]:
+def cached_sample_embedding_at(cache: Path, embedder: Embedder, sample: Path, *, write_cache: bool = True) -> list[float]:
     sample_hash = io_utils.sha256_file(sample)
     if cache.exists():
-        data = io_utils.read_json(cache)
+        try:
+            data = io_utils.read_json(cache)
+        except Exception:
+            data = None
         if (
-            data.get("model") == embedder.model_id
+            isinstance(data, dict)
+            and data.get("model") == embedder.model_id
             and data.get("sample_file") == sample.name
             and data.get("sample_sha256") == sample_hash
             and isinstance(data.get("embedding"), list)
         ):
             return [float(x) for x in data["embedding"]]
     embedding = embedder.embed(sample)
-    io_utils.write_json(cache, {
-        "sample_id": sample.stem,
-        "sample_file": sample.name,
-        "sample_sha256": sample_hash,
-        "model": embedder.model_id,
-        "embedding": embedding,
-        "created_at": io_utils.utc_now(),
-    })
+    if write_cache:
+        io_utils.write_json(cache, {
+            "sample_id": sample.stem,
+            "sample_file": sample.name,
+            "sample_sha256": sample_hash,
+            "model": embedder.model_id,
+            "embedding": embedding,
+            "created_at": io_utils.utc_now(),
+        })
     return embedding
 
 
@@ -273,6 +284,7 @@ def match_speaker(
     profiles: list[dict[str, Any]],
     auto_threshold: float = 0.78,
     confirm_threshold: float = 0.65,
+    write_embedding_cache: bool = True,
 ) -> dict[str, Any]:
     samples = voice_profiles.enrolled_samples(profiles_root)
     if not samples:
@@ -286,7 +298,7 @@ def match_speaker(
         probe = embedder.embed(audio_path, float(span["start"]), float(span["end"]))
         for sample in samples:
             person_id = person_id_from_sample(sample)
-            enrolled = cached_sample_embedding(embedder, sample)
+            enrolled = cached_sample_embedding(embedder, sample, write_cache=write_embedding_cache)
             score = cosine_similarity(probe, enrolled)
             profile = profile_index.get(person_id, {})
             candidate_rows.append({
@@ -322,6 +334,7 @@ def match_speaker_aggregated(
     confirm_threshold: float = 0.45,
     margin_threshold: float = 0.08,
     top_k: int = 3,
+    write_embedding_cache: bool = True,
 ) -> dict[str, Any]:
     samples = voice_profiles.enrolled_samples(profiles_root)
     if not samples:
@@ -341,7 +354,12 @@ def match_speaker_aggregated(
     for span, probe in span_embeddings:
         for sample in samples:
             person_id = person_id_from_sample(sample)
-            enrolled = cached_sample_embedding_for_backend(embedder, sample, backend_name)
+            enrolled = cached_sample_embedding_for_backend(
+                embedder,
+                sample,
+                backend_name,
+                write_cache=write_embedding_cache,
+            )
             score = cosine_similarity(probe, enrolled)
             scores_by_person[person_id].append(score)
             samples_by_person[person_id].add(str(sample))

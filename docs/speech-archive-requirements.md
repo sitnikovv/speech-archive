@@ -11,7 +11,7 @@
 - распознавать речь дословно с таймкодами;
 - выполнять diarization: определять локальные `SPEAKER_XX` по времени;
 - сопоставлять локальные голоса с подтверждёнными voice profiles;
-- вручную назначать оставшиеся имена говорящих;
+- материализовать file-local speaker mapping и вручную назначать только оставшиеся нерешённые имена говорящих;
 - сохранять подтверждённые voice samples только после ручного подтверждения;
 - экспортировать transcript по ролям;
 - выполнять LLM-review согласованности ролей/говорящих без автоправок;
@@ -44,8 +44,8 @@
 | 05 | `scripts/05_diarize.py` | Diarization. |
 | 06 | `scripts/06_merge_asr_diarization.py` | Merge ASR + diarization. |
 | 07 | `scripts/07_voice_identification.py` | Основной pyannote voice identification. |
-| 07_1 | `scripts/07_1_voice_identification_ecapa.py` | Экспериментальный ECAPA diagnostic backend. |
-| 08 | `scripts/08_name_speakers.py` | Ручное назначение оставшихся имён и enrollment. |
+| 07_1 | `scripts/07_1_voice_identification_ecapa.py` | Необязательный ECAPA diagnostic backend для сравнения качества. |
+| 08 | `scripts/08_name_speakers.py` | Материализация speaker mapping; ручное назначение оставшихся имён и enrollment только при unresolved speakers. |
 | 09 | `scripts/09_export_transcript.py` | Transcript with names. |
 | 10 | `scripts/10_role_consistency_review.py` | LLM role-consistency review, без автоправок. |
 | 11 | `scripts/11_build_voice_profile_embeddings.py` | Пересборка/migration voice-profile embedding cache. |
@@ -76,7 +76,7 @@
              │                       diagnostic optional branch
              ▼
       08_name_speakers
-      ручной интерактивный gate
+      auto mapping или ручной gate для unresolved
              │
              ▼
         09_transcript
@@ -135,7 +135,8 @@ uv run python scripts/07_1_voice_identification_ecapa.py \
   "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 
-# 08: ручное назначение имён. Запускать только вручную пользователем.
+# 08: speaker mapping. Если stage 07 распознал всех как matched, проходит без вопросов.
+# Если остались unresolved speakers, запускать вручную пользователем.
 uv run python scripts/08_name_speakers.py \
   "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
   "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
@@ -159,10 +160,10 @@ uv run python scripts/11_build_voice_profile_embeddings.py --backend all
 uv run python scripts/99_check_pipeline_outputs.py "$MP3"
 ```
 
-### Общий запуск до ручного шага 08
+### Общий запуск до условного шага 08
 
 Эта команда выполняет все неинтерактивные шаги до `08_name_speakers.py`: `00` → `07`.
-Она не запускает `08`, потому что там нужно слушать фрагменты и вводить имена.
+Она не запускает `07_1`, потому что это необязательная diagnostic-ветка для сравнения backend-ов.
 
 ```bash
 set -euo pipefail
@@ -185,7 +186,7 @@ uv run python scripts/07_voice_identification.py \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 ```
 
-Дальше остановка на ручном gate:
+Дальше создаётся speaker mapping. Если stage 07 уверенно распознал всех `SPEAKER_XX` со статусом `matched`, шаг 08 не задаёт вопросов и только материализует `08_speakers` artifact. Если остались unresolved speakers, это ручной gate:
 
 ```bash
 uv run python scripts/08_name_speakers.py \
@@ -194,7 +195,7 @@ uv run python scripts/08_name_speakers.py \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 ```
 
-Интерактивные/ручные шаги запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто проходить `08_name_speakers.py` за пользователя.
+Интерактивную часть запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто назначать unresolved speakers за пользователя.
 
 ## 5. Рабочая структура файлов
 
@@ -265,7 +266,7 @@ data/artifacts/06_merge/<base>.merge.<asr-model>.<diarization-model>.v1.json
 data/artifacts/06_merge/<base>.merge.<asr-model>.<diarization-model>.v1.manifest.json
 data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.json
 data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.manifest.json
-data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.json
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.speechbrain-ecapa.v1.json
 data/artifacts/08_speakers/<base>.speakers.manual.v1.json
 data/artifacts/08_speakers/<base>.speakers.manual.v1.manifest.json
 data/artifacts/09_transcript/<base>.transcript.with-names.v1.txt
@@ -317,6 +318,8 @@ Outputs:
 data/artifacts/00_doctor/<base>.doctor.v1.json
 data/artifacts/00_doctor/<base>.doctor.v1.manifest.json
 ```
+
+Если `--source-mp3` не передан, используется base `environment`.
 
 ### Шаг 01. Prepare input
 
@@ -390,7 +393,7 @@ data/artifacts/04_asr/<base>.asr.Systran_faster-whisper-large-v3.v1.manifest.jso
 - читать audio artifact;
 - использовать `pyannote/speaker-diarization-3.1`;
 - читать token из `token.txt`, не печатая token;
-- сохранять raw diarization и normalized speaker segments.
+- сохранять raw diarization как pyannote RTTM/tracks и отдельно normalized speaker segments.
 
 Outputs:
 
@@ -427,6 +430,7 @@ data/artifacts/06_merge/<base>.merge.Systran_faster-whisper-large-v3.pyannote_sp
 - сохранять candidates, score matrix, best match, thresholds и status;
 - не спрашивать пользователя;
 - не изменять voice profiles.
+- не создавать и не обновлять embedding cache в `data/voice_profiles`; это делает stage 11.
 
 Возможные статусы:
 
@@ -455,30 +459,33 @@ data/artifacts/07_voice_identification/<base>.voice-id.pyannote-embedding.v1.man
 - использовать SpeechBrain ECAPA backend;
 - писать отдельный diagnostic artifact;
 - не заменять основной stage 07;
+- не быть обязательным для stage 08/09/10/99;
+- не создавать и не обновлять embedding cache в `data/voice_profiles`;
 - не делать auto-match обязательным до калибровки.
 
 Outputs:
 
 ```text
-data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.json
-data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.ecapa.v1.manifest.json
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.speechbrain-ecapa.v1.json
+data/artifacts/07_1_voice_identification_ecapa/<base>.voice-id.speechbrain-ecapa.v1.manifest.json
 ```
 
 ### Шаг 08. Name speakers
 
-`scripts/08_name_speakers.py` — ручной интерактивный gate.
+`scripts/08_name_speakers.py` — materialization step с условным ручным gate.
 
 Он должен:
 
 - читать merge artifact и voice-id artifact;
 - автоматически принять только уверенные `matched` из stage 07;
+- если все `SPEAKER_XX` имеют статус `matched`, создать speakers artifact без вопросов и без сохранения новых samples;
 - для unresolved speakers проигрывать фрагменты и спрашивать пользователя;
 - сохранять file-local speaker mapping;
 - при ручном подтверждении человека сохранять enrolled sample из source/input MP3;
 - не сохранять samples для `unknown`/`skip`;
 - не менять merge и voice-id artifacts.
 
-Этот шаг должен запускать пользователь вручную в своём терминале и аудио-окружении.
+Интерактивную часть этого шага должен запускать пользователь вручную в своём терминале и аудио-окружении.
 
 Outputs:
 
@@ -579,13 +586,13 @@ Checker должен печатать `OK` только если обязате�
 
 Интерактивные/ручные этапы нельзя запускать скрыто агентом.
 
-Сейчас ручной gate:
+Сейчас условный ручной gate:
 
 ```text
 scripts/08_name_speakers.py
 ```
 
-Причина:
+Причина для unresolved speakers:
 
 - пользователь должен слышать фрагменты;
 - пользователь вводит имена;

@@ -22,6 +22,7 @@ def main() -> int:
     if p.returncode!=0: raise SystemExit(p.stderr)
     mp3_dur=float(io_utils.ffprobe(src)['format'].get('duration',0.0)); wav_dur=float(io_utils.ffprobe(out)['format'].get('duration',0.0))
     man=artifacts.versioned_path(stage, stem, '.manifest.json', v)
-    m={'artifact':str(out),'stage':'02_audio','script':'scripts/02_make_audio_variant.py','input_artifacts':[{'path':str(src),'sha256':io_utils.sha256_file(src)}],'command':cmd,'variant':'normalized','duration':wav_dur,'source_duration':mp3_dur,'sha256':io_utils.sha256_file(out),'created_at':io_utils.utc_now()}
+    out_hash=io_utils.sha256_file(out)
+    m={'artifact':str(out),'stage':'02_audio','script':'scripts/02_make_audio_variant.py','input_artifacts':[{'path':str(src),'sha256':io_utils.sha256_file(src)}],'output_artifacts':[{'path':str(out),'sha256':out_hash}],'command':cmd,'variant':'normalized','duration':wav_dur,'source_duration':mp3_dur,'sha256':out_hash,'created_at':io_utils.utc_now()}
     io_utils.write_json(man,m); print(out); return 0
 if __name__=='__main__': raise SystemExit(main())

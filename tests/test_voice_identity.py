@@ -75,6 +75,22 @@ class VoiceIdentityTests(unittest.TestCase):
             self.assertNotIn("source_audio", data)
             self.assertNotIn("source_mp3", data)
 
+    def test_cached_sample_embedding_can_run_without_writing_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "voice_profiles"
+            profile = voice_profiles.create_profile(root, "Яна Ситникова")
+            sample_dir = Path(profile["profile_dir"]) / "samples" / "enrolled"
+            sample_dir.mkdir(parents=True)
+            sample = sample_dir / "yana.mp3"
+            sample.write_bytes(b"fake")
+            embedder = FakeEmbedder()
+
+            embedding = voice_identity.cached_sample_embedding(embedder, sample, write_cache=False)
+            cache = voice_identity.embedding_cache_path(sample, embedder.model_id)
+
+            self.assertEqual(embedding, [1.0, 0.0])
+            self.assertFalse(cache.exists())
+
     def test_assignments_from_voice_id_uses_only_matched(self):
         data = {"artifact": "voice.json", "speaker_matches": [
             {"speaker_label": "SPEAKER_00", "status": "matched", "best": {"person_id": "yana", "full_name": "Яна", "score": 0.91, "sample": "s.mp3"}},

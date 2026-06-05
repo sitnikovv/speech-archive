@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import argparse
+import argparse, io
 from speech_archive_lib import artifacts, io_utils
 
 def clean_base(path: Path) -> str:
@@ -31,11 +31,17 @@ def main() -> int:
             import torch; pipe.to(torch.device('cuda'))
         except Exception: pass
     result=pipe(str(audio)); annotation=getattr(result,'speaker_diarization',result)
-    turns=[]
-    for i,(turn,_,speaker) in enumerate(annotation.itertracks(yield_label=True),1):
+    raw_tracks=[]; turns=[]
+    for i,(turn,track,speaker) in enumerate(annotation.itertracks(yield_label=True),1):
+        raw_tracks.append({'id':i,'start':float(turn.start),'end':float(turn.end),'duration':float(turn.end-turn.start),'track':str(track),'label':str(speaker)})
         turns.append({'id':i,'start':float(turn.start),'end':float(turn.end),'speaker':str(speaker),'confidence':None,'raw_ref':i})
+    rttm=None; rttm_error=None
+    try:
+        buf=io.StringIO(); annotation.write_rttm(buf); rttm=buf.getvalue()
+    except Exception as exc:
+        rttm_error=type(exc).__name__+': '+str(exc)
     v=artifacts.next_version(stage, stem+'.segments','.json'); rawp=artifacts.versioned_path(stage,stem+'.raw','.json',v); segp=artifacts.versioned_path(stage,stem+'.segments','.json',v); man=artifacts.versioned_path(stage,stem,'.manifest.json',v)
-    io_utils.write_json(rawp,{'artifact':str(rawp),'stage':'05_diarization','source_audio':str(audio),'model':model_id,'created_at':io_utils.utc_now(),'segments':turns})
+    io_utils.write_json(rawp,{'artifact':str(rawp),'stage':'05_diarization','source_audio':str(audio),'model':model_id,'created_at':io_utils.utc_now(),'raw_format':'pyannote_annotation_rttm_and_tracks','rttm':rttm,'rttm_error':rttm_error,'tracks':raw_tracks})
     io_utils.write_json(segp,{'artifact':str(segp),'stage':'05_diarization','source_mp3':f'{base}.mp3','source_audio':str(audio),'model':model_id,'segments':turns})
     io_utils.write_json(man,{'stage':'05_diarization','script':'scripts/05_diarize.py','input_artifacts':[{'path':str(audio),'sha256':io_utils.sha256_file(audio)}],'output_artifacts':[{'path':str(rawp),'sha256':io_utils.sha256_file(rawp)},{'path':str(segp),'sha256':io_utils.sha256_file(segp)}],'model':model_id,'token_printed':False,'created_at':io_utils.utc_now()})
     print(segp); return 0

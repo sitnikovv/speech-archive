@@ -86,6 +86,32 @@ class VoiceProfileTests(unittest.TestCase):
             run.assert_called_once()
             self.assertIn("-c", run.call_args.args[0])
             self.assertIn("copy", run.call_args.args[0])
+            self.assertIn("-n", run.call_args.args[0])
+
+    def test_save_enrolled_mp3_sample_reuses_existing_sample_without_overwrite(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d) / "voice_profiles"
+            source = Path(d) / "source.mp3"
+            source.write_bytes(b"fake")
+            profile = voice_profiles.create_profile(root, "Яна Ситникова")
+            sample_dir = Path(profile["profile_dir"]) / "samples" / "enrolled"
+            sample_dir.mkdir(parents=True)
+            sid = voice_profiles.sample_id("call.mp3", "SPEAKER_00", 1.0, 2.0, profile["person_id"])
+            (sample_dir / f"{sid}.mp3").write_bytes(b"existing")
+            (sample_dir / f"{sid}.json").write_text(json.dumps({"sample_id": sid}), encoding="utf-8")
+
+            with mock.patch("speech_archive_lib.voice_profiles.subprocess.run") as run:
+                result = voice_profiles.save_enrolled_mp3_sample(
+                    profile=profile,
+                    source_mp3_path=source,
+                    source_mp3="call.mp3",
+                    speaker_label="SPEAKER_00",
+                    span={"start": 1.0, "end": 2.0},
+                    call_meta={},
+                )
+
+            run.assert_not_called()
+            self.assertEqual(Path(result["sample"]).name, f"{sid}.mp3")
 
 
 if __name__ == "__main__":

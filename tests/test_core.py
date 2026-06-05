@@ -11,8 +11,8 @@ class ArtifactTests(unittest.TestCase):
         base = "Яна Ситникова(0079263717233)_20260509182759"
         self.assertEqual(artifacts.safe_model_id("Systran/faster-whisper-large-v3"), "Systran_faster-whisper-large-v3")
         paths = artifacts.paths_for(Path("data"), base, "Systran/faster-whisper-large-v3", "pyannote/speaker-diarization-3.1")
-        self.assertTrue(str(paths.asr_segments).endswith(".asr.segments.Systran_faster-whisper-large-v3.json"))
-        self.assertTrue(str(paths.diarization_segments).endswith(".diarization.segments.pyannote_speaker-diarization-3.1.json"))
+        self.assertEqual(str(paths.asr_segments), f"data/artifacts/04_asr/{base}.asr.Systran_faster-whisper-large-v3.segments.v1.json")
+        self.assertEqual(str(paths.diarization_segments), f"data/artifacts/05_diarization/{base}.diarization.pyannote_speaker-diarization-3.1.segments.v1.json")
 
     def test_atomic_json_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:

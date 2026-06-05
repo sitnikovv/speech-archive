@@ -53,7 +53,6 @@ def main() -> int:
         return 0
 
     profiles_root = Path(args.voice_profiles_dir)
-    profiles_root.mkdir(parents=True, exist_ok=True)
     call_meta = voice_profiles.parse_call_filename(source_mp3)
     profiles = voice_profiles.load_profiles(profiles_root)
     phone_resolution = voice_profiles.resolve_phone_profiles(profiles, call_meta.get("phone_e164"), call_meta.get("call_datetime"))
@@ -82,6 +81,7 @@ def main() -> int:
                     profiles=profiles,
                     auto_threshold=args.auto_threshold,
                     confirm_threshold=args.confirm_threshold,
+                    write_embedding_cache=False,
                 ))
             except Exception as exc:
                 speaker_matches.append({"speaker_label": label, "status": "error", "error": str(exc), "candidates": [], "best": None})
@@ -109,6 +109,7 @@ def main() -> int:
         "voice_profiles_dir": str(profiles_root),
         "phone_resolution": phone_resolution,
         "backend": {"name": "pyannote.embedding", "model": args.model, "status": backend_status, "error": backend_error},
+        "embedding_cache": {"read_existing": True, "write": False},
         "thresholds": {"auto": args.auto_threshold, "confirm": args.confirm_threshold},
         "speaker_matches": speaker_matches,
     }
@@ -122,6 +123,7 @@ def main() -> int:
         ],
         "output_artifacts": [{"path": str(out), "sha256": io_utils.sha256_file(out)}],
         "backend": {"name": "pyannote.embedding", "model": args.model, "status": backend_status},
+        "embedding_cache": {"read_existing": True, "write": False},
         "created_at": io_utils.utc_now(),
     })
     print(out)

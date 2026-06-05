@@ -58,6 +58,13 @@ data/artifacts/00_doctor/sound.doctor.v1.json
 data/artifacts/00_doctor/sound.doctor.v1.manifest.json
 ```
 
+Если `--source-mp3` не передан, создаётся environment report:
+
+```text
+data/artifacts/00_doctor/environment.doctor.v1.json
+data/artifacts/00_doctor/environment.doctor.v1.manifest.json
+```
+
 ---
 
 ## Шаг 01. Prepare input / рабочая копия mp3
@@ -200,7 +207,7 @@ scripts/05_diarize.py
 - читает audio artifact;
 - берёт token из `token.txt`, не печатая token;
 - запускает `pyannote/speaker-diarization-3.1`;
-- сохраняет raw diarization и normalized speaker segments.
+- сохраняет raw diarization как pyannote RTTM/tracks и отдельно normalized speaker segments.
 
 Diarization не читает ASR и не зависит от текста.
 
@@ -311,9 +318,45 @@ data/artifacts/07_voice_identification/sound.voice-id.pyannote-embedding.v1.json
 data/artifacts/07_voice_identification/sound.voice-id.pyannote-embedding.v1.manifest.json
 ```
 
+Stage 07 читает уже существующий embedding cache, если он есть, но не создаёт и не обновляет файлы в `data/voice_profiles`. Пересборка cache выполняется отдельным stage 11.
+
 ---
 
-## Шаг 08. Name speakers / ручное назначение оставшихся имён
+## Шаг 07_1. Voice identification ECAPA diagnostic / сравнение backend-а
+
+Скрипт:
+
+```text
+scripts/07_1_voice_identification_ecapa.py
+```
+
+Что делает:
+
+- читает те же входы, что stage 07;
+- использует SpeechBrain ECAPA backend;
+- пишет отдельный diagnostic artifact;
+- нужен для сравнения качества с основным stage 07;
+- не участвует в обязательной цепочке `08` → `09` → `10` → `99`;
+- не создаёт и не обновляет embedding cache в `data/voice_profiles`.
+
+Входы:
+
+```text
+data/artifacts/06_merge/sound.merge...v1.json
+data/artifacts/02_audio/sound.audio.normalized.v1.wav
+data/voice_profiles/<person_id>/samples/enrolled/*.mp3
+```
+
+Outputs:
+
+```text
+data/artifacts/07_1_voice_identification_ecapa/sound.voice-id.speechbrain-ecapa.v1.json
+data/artifacts/07_1_voice_identification_ecapa/sound.voice-id.speechbrain-ecapa.v1.manifest.json
+```
+
+---
+
+## Шаг 08. Name speakers / speaker mapping и ручное назначение оставшихся имён
 
 Скрипт:
 
@@ -325,6 +368,7 @@ scripts/08_name_speakers.py
 
 - читает merge artifact и voice identification artifact;
 - автоматически переносит только `matched` из шага 07 в file-local mapping;
+- если все `SPEAKER_XX` имеют статус `matched`, создаёт speakers artifact без вопросов, без проигрывания audio и без сохранения новых samples;
 - для `needs_confirmation`, `no_match`, `no_samples`, `backend_unavailable` и других нерешённых статусов проигрывает фрагменты текущего speaker по одному;
 - Enter / `next` / `bad` означает следующий фрагмент этого же speaker;
 - когда фрагменты текущего speaker закончились, спрашивает, переходить ли к следующему; если ответ `нет`, начинает список фрагментов этого speaker заново;
@@ -567,7 +611,8 @@ uv run python scripts/07_1_voice_identification_ecapa.py \
   "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 
-# 08: ручное назначение имён. Запускать только вручную пользователем.
+# 08: speaker mapping. Если stage 07 распознал всех как matched, проходит без вопросов.
+# Если остались unresolved speakers, запускать вручную пользователем.
 uv run python scripts/08_name_speakers.py \
   "data/artifacts/06_merge/${BASE}.merge.Systran_faster-whisper-large-v3.pyannote_speaker-diarization-3.1.v1.json" \
   "data/artifacts/07_voice_identification/${BASE}.voice-id.pyannote-embedding.v1.json" \
@@ -591,10 +636,10 @@ uv run python scripts/11_build_voice_profile_embeddings.py --backend all
 uv run python scripts/99_check_pipeline_outputs.py "$MP3"
 ```
 
-### Общий запуск до ручного шага 08
+### Общий запуск до условного шага 08
 
 Эта команда выполняет все неинтерактивные шаги до `08_name_speakers.py`: `00` → `07`.
-Она не запускает `08`, потому что там нужно слушать фрагменты и вводить имена.
+Она не запускает `07_1`, потому что это необязательная diagnostic-ветка для сравнения backend-ов.
 
 ```bash
 set -euo pipefail
@@ -617,7 +662,7 @@ uv run python scripts/07_voice_identification.py \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 ```
 
-Дальше остановка на ручном gate:
+Дальше создаётся speaker mapping. Если stage 07 уверенно распознал всех `SPEAKER_XX` со статусом `matched`, шаг 08 не задаёт вопросов и только материализует `08_speakers` artifact. Если остались unresolved speakers, это ручной gate:
 
 ```bash
 uv run python scripts/08_name_speakers.py \
@@ -626,7 +671,7 @@ uv run python scripts/08_name_speakers.py \
   --audio "data/artifacts/02_audio/${BASE}.audio.normalized.v1.wav"
 ```
 
-Интерактивные/ручные шаги запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто проходить `08_name_speakers.py` за пользователя.
+Интерактивную часть запускает только пользователь в своём терминале и аудио-окружении. Агент не должен скрыто назначать unresolved speakers за пользователя.
 
 ---
 
@@ -655,7 +700,7 @@ uv run python scripts/08_name_speakers.py \
              │                       diagnostic optional branch
              ▼
       08_name_speakers
-      ручной интерактивный gate
+      auto mapping или ручной gate для unresolved
              │
              ▼
         09_transcript

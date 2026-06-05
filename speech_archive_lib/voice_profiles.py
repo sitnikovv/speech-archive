@@ -265,8 +265,9 @@ def save_enrolled_mp3_sample(
     out_dir.mkdir(parents=True, exist_ok=True)
     mp3 = out_dir / f"{sid}.mp3"
     meta = out_dir / f"{sid}.json"
-    cmd = ["ffmpeg", "-y", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source_mp3_path), "-c", "copy", str(mp3)]
-    subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not mp3.exists():
+        cmd = ["ffmpeg", "-n", "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", str(source_mp3_path), "-c", "copy", str(mp3)]
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     data = {
         "sample_id": sid,
         "status": "enrolled_manual_voice_confirmation",
@@ -275,5 +276,6 @@ def save_enrolled_mp3_sample(
         "duration": duration,
         "created_at": io_utils.utc_now(),
     }
-    io_utils.write_json(meta, data)
+    if not meta.exists():
+        io_utils.write_json(meta, data, overwrite=False)
     return {"sample_id": sid, "sample": portable_project_path(mp3), "metadata": portable_project_path(meta)}
