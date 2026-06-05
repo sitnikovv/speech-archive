@@ -52,7 +52,9 @@ def safe_component(text: str) -> str:
 
 
 def person_id_from_name(name: str) -> str:
-    return safe_component(name).lower()
+    value = re.sub(r"[\\/:*?\"<>|\x00-\x1f]+", "_", name).strip(" ._")
+    value = re.sub(r"\s+", " ", value)
+    return value or "value"
 
 
 def _parse_date(value: str | None) -> datetime | None:
@@ -151,7 +153,7 @@ def phone_valid_for_profile(profile: dict[str, Any], phone_e164: str | None, at_
     return False
 
 
-def add_phone_binding(profile: dict[str, Any], phone_e164: str, observed_at: str | None, source: str = "filename_confirmed_interactive") -> dict[str, Any] | None:
+def add_phone_binding(profile: dict[str, Any], phone_e164: str, observed_at: str | None, source: str = "manual") -> dict[str, Any] | None:
     normalized = normalize_phone(phone_e164)
     if not normalized:
         return None
@@ -162,8 +164,6 @@ def add_phone_binding(profile: dict[str, Any], phone_e164: str, observed_at: str
         "valid_from": None,
         "valid_to": None,
         "confirmed": True,
-        "source": source,
-        "observed_at": observed_at,
     }
     profile.setdefault("phones", []).append(item)
     _write_profile(profile)
@@ -237,7 +237,15 @@ def auto_match_placeholder(profiles_root: Path, phone_resolution: dict[str, Any]
 def sample_id(source_mp3: str, speaker_label: str, start: float, end: float, person_id: str) -> str:
     key = f"{source_mp3}|{speaker_label}|{start:.3f}|{end:.3f}|{person_id}"
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
-    return f"{safe_component(Path(source_mp3).stem)}.{safe_component(speaker_label)}.{start:.3f}-{end:.3f}.{digest}"
+    return f"{safe_component(person_id)}.sample.{digest}"
+
+
+def portable_project_path(path: Path) -> str:
+    resolved = path.resolve()
+    try:
+        return str(resolved.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(path)
 
 
 def save_enrolled_mp3_sample(
@@ -262,17 +270,10 @@ def save_enrolled_mp3_sample(
     data = {
         "sample_id": sid,
         "status": "enrolled_manual_voice_confirmation",
-        "audio_file": str(mp3),
-        "source_audio": str(source_mp3_path),
-        "source_mp3": source_mp3,
-        "speaker_label": speaker_label,
+        "audio_file": mp3.name,
         "person_id": profile.get("person_id"),
-        "start": start,
-        "end": end,
         "duration": duration,
-        "text": span.get("text"),
-        "call_metadata": call_meta,
         "created_at": io_utils.utc_now(),
     }
     io_utils.write_json(meta, data)
-    return {"sample_id": sid, "sample": str(mp3), "metadata": str(meta), "start": start, "end": end}
+    return {"sample_id": sid, "sample": portable_project_path(mp3), "metadata": portable_project_path(meta)}

@@ -96,7 +96,7 @@ def main() -> int:
 
     base = artifacts.base_name(Path(merged.get("source_mp3", "input.mp3")))
     artifacts.ensure_dirs(ROOT)
-    stage = artifacts.stage_dir(ROOT / "data", "12", "role_consistency_review")
+    stage = artifacts.stage_dir(ROOT / "data", "10", "role_consistency_review")
     stage.mkdir(parents=True, exist_ok=True)
     stem = f"{base}.role-consistency-review.hermes"
     existing = artifacts.latest_versioned_path(stage, stem, ".json") if not args.new_version else None
@@ -115,7 +115,7 @@ def main() -> int:
     man = artifacts.manifest_for(out)
     data = {
         "artifact": str(out),
-        "stage": "12_role_consistency_review",
+        "stage": "10_role_consistency_review",
         "source_mp3": merged.get("source_mp3"),
         "merged_file": str(merged_p),
         "speakers_file": str(speakers_p),
@@ -128,8 +128,8 @@ def main() -> int:
     raw_out = out.with_suffix(".raw.txt")
     io_utils.write_text(raw_out, raw_response)
     io_utils.write_json(man, {
-        "stage": "12_role_consistency_review",
-        "script": "scripts/12_role_consistency_review.py",
+        "stage": "10_role_consistency_review",
+        "script": "scripts/10_role_consistency_review.py",
         "input_artifacts": [
             {"path": str(merged_p), "sha256": io_utils.sha256_file(merged_p)},
             {"path": str(speakers_p), "sha256": io_utils.sha256_file(speakers_p)},

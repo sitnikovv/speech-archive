@@ -22,12 +22,14 @@ class ImmutableArtifactTests(unittest.TestCase):
     def test_stage_dir_uses_number_and_name(self):
         self.assertEqual(str(artifacts.stage_dir(Path("data"), "04", "asr")), "data/artifacts/04_asr")
 
-    def test_ensure_dirs_includes_role_consistency_review_stage(self):
+    def test_ensure_dirs_includes_late_review_and_embedding_stages(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
             artifacts.ensure_dirs(root)
             self.assertTrue((root / "data" / "artifacts" / "07_voice_identification").is_dir())
-            self.assertTrue((root / "data" / "artifacts" / "12_role_consistency_review").is_dir())
+            self.assertTrue((root / "data" / "artifacts" / "10_role_consistency_review").is_dir())
+            self.assertTrue((root / "data" / "artifacts" / "11_voice_profile_embeddings").is_dir())
+            self.assertTrue((root / "data" / "artifacts" / "99_check").is_dir())
 
 
 if __name__ == "__main__":

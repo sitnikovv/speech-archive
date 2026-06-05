@@ -131,6 +131,10 @@ def maybe_add_phone(profile: dict, call_meta: dict) -> dict | None:
     return voice_profiles.add_phone_binding(profile, phone, observed_at=call_meta.get('call_datetime'))
 
 
+def should_offer_phone_binding(updates: list[dict]) -> bool:
+    return any(update.get('type') == 'profile_created' for update in updates)
+
+
 def ask_speaker_name(label: str, spans: list[dict], audio: Path, player: str, debug_no_play: bool) -> tuple[str, dict | None]:
     if not spans:
         print(f'Нет подходящих фрагментов для {label}.')
@@ -182,7 +186,7 @@ def main() -> int:
         if name != 'UNKNOWN' and selected_span is not None:
             profile, updates = select_or_create_profile(profiles_root, profiles, name, call_meta, args.confirm_existing_profiles)
             if profile:
-                phone_added = maybe_add_phone(profile, call_meta)
+                phone_added = maybe_add_phone(profile, call_meta) if should_offer_phone_binding(updates) else None
                 if phone_added:
                     updates.append({'type': 'phone_added', 'phone': phone_added})
                 saved = None
@@ -191,7 +195,7 @@ def main() -> int:
                     enrolled_samples.append({**saved,'speaker_label':label,'person_id':profile.get('person_id')})
                 else:
                     print('Предупреждение: original mp3 не найден, enrolled sample не сохранён.', file=sys.stderr)
-                evidence={'source_audio':str(audio),'source_mp3_sample_source':str(original_mp3) if original_mp3 else None,'start':selected_span['start'],'end':selected_span['end'],'note':'пользователь подтвердил по прослушиванию','person_id':profile.get('person_id'),'enrolled_sample':saved}
+                evidence={'note':'пользователь подтвердил по прослушиванию','person_id':profile.get('person_id'),'enrolled_sample':saved}
                 method='manual_voice_confirmation'
                 if updates:
                     profile_updates.append({'person_id': profile.get('person_id'), 'profile_dir': profile.get('profile_dir'), 'updates': updates})

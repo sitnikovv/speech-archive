@@ -57,6 +57,8 @@ class SpeakerInputTests(unittest.TestCase):
             sys.stdin, sys.stdout, sys.stderr = old_stdin, old_stdout, old_stderr
     def test_enable_utf8_erase_sets_iutf8_on_tty(self):
         module = load_script_module()
+        if not getattr(module.termios, "IUTF8", 0):
+            self.skipTest("termios.IUTF8 is not available on this platform")
         attrs = [0, 0, 0, 0, 0, 0, []]
         with mock.patch.object(module.termios, "tcgetattr", return_value=attrs.copy()) as getattrs, \
              mock.patch.object(module.termios, "tcsetattr") as setattrs:
@@ -84,6 +86,12 @@ class SpeakerInputTests(unittest.TestCase):
         self.assertIn("--max-samples-per-speaker", help_text)
         with self.assertRaises(SystemExit), mock.patch.object(sys, "stderr", io.StringIO()):
             module.build_parser().parse_args(["merged.json", "voice-id.json", "--audio", "audio.wav", "--non-interactive"])
+
+    def test_phone_binding_prompt_only_for_new_profiles(self):
+        module = load_script_module()
+        self.assertFalse(module.should_offer_phone_binding([]))
+        self.assertFalse(module.should_offer_phone_binding([{"type": "alias_added"}]))
+        self.assertTrue(module.should_offer_phone_binding([{"type": "profile_created"}]))
 
     def test_ask_speaker_name_enter_cycles_and_restarts_when_fragments_end(self):
         module = load_script_module()

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from speech_archive_lib import artifacts, io_utils, merge, export, audit
+from speech_archive_lib import artifacts, io_utils, merge, export
 
 
 class ArtifactTests(unittest.TestCase):
@@ -54,13 +54,6 @@ class ExportTests(unittest.TestCase):
         text = export.render_transcript(merged, speakers, generated_at="2026-06-03T00:00:00")
         self.assertIn("Original mp3: call.mp3", text)
         self.assertIn("00:01:23.450 | Яна | привет", text)
-
-
-class AuditTests(unittest.TestCase):
-    def test_audit_returns_empty_candidate_file_shape(self):
-        result = audit.audit_candidates({"segments": []}, {"assignments": {}})
-        self.assertEqual(result["candidates"], [])
-        self.assertEqual(result["status"], "heuristic_placeholder")
 
 
 if __name__ == "__main__":

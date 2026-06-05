@@ -115,9 +115,9 @@ def ensure_dirs(root: Path) -> list[Path]:
         stage_dir(root / "data", "07", "voice_identification"),
         stage_dir(root / "data", "08", "speakers"),
         stage_dir(root / "data", "09", "transcript"),
-        stage_dir(root / "data", "10", "audit"),
-        stage_dir(root / "data", "11", "check"),
-        stage_dir(root / "data", "12", "role_consistency_review"),
+        stage_dir(root / "data", "10", "role_consistency_review"),
+        stage_dir(root / "data", "11", "voice_profile_embeddings"),
+        stage_dir(root / "data", "99", "check"),
         root / "data" / "voice_profiles",
         root / "data" / "state",
     ]
